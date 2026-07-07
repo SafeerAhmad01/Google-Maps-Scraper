@@ -310,5 +310,5 @@ class WebSearchBackend:
 
         Communicator.show_message(
             f"Saved!  {len(self.results)} records  →  {path}\n"
-            f"Tool by SafeerAhmad — 100% free, no API keys."
+            f"LeadScrapper by Safeer Ahmad — 100% free, no API keys."
         )

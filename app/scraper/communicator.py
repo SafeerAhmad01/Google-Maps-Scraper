@@ -32,6 +32,13 @@ class Communicator:
         cls.__frontend_object.end_processing()
 
     @classmethod
+    def set_progress(cls, current, total, message=""):
+        """Report progress to the frontend (current/total steps done)."""
+        if cls.__frontend_object is not None and hasattr(
+                cls.__frontend_object, "update_progress"):
+            cls.__frontend_object.update_progress(current, total, message)
+
+    @classmethod
     def get_output_format(cls):
         return cls.__frontend_object.outputFormatValue
     

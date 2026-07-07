@@ -49,6 +49,62 @@ def scope_choices():
     return [SIMPLE, ALL] + get_countries()
 
 
+DEFAULT_DIRECTIONS = [
+    # 16-wind compass rose (each = its own separate file)
+    ("North", "North"),
+    ("North-North-East", "North North East"),
+    ("North-East", "North East"),
+    ("East-North-East", "East North East"),
+    ("East", "East"),
+    ("East-South-East", "East South East"),
+    ("South-East", "South East"),
+    ("South-South-East", "South South East"),
+    ("South", "South"),
+    ("South-South-West", "South South West"),
+    ("South-West", "South West"),
+    ("West-South-West", "West South West"),
+    ("West", "West"),
+    ("West-North-West", "West North West"),
+    ("North-West", "North West"),
+    ("North-North-West", "North North West"),
+    # extras
+    ("Central", "Central"),
+    ("Northern", "Northern"),
+    ("Southern", "Southern"),
+    ("Eastern", "Eastern"),
+    ("Western", "Western"),
+    ("Coastal", "Coastal"),
+    ("Upper", "Upper"),
+    ("Lower", "Lower"),
+]
+
+
+def load_directions():
+    """Direction options for the GUI as a list of (label, word) tuples.
+
+    Users can add their own by dropping a ``directions.json`` next to the .exe.
+    That file is a JSON list; each item is either a plain string (used as both
+    label and search word) or an object like {"label": "North-East", "word":
+    "North East"}. If the file is missing or invalid, the built-in 8 are used.
+    """
+    external = os.path.join(app_base_dir(), "directions.json")
+    if not os.path.exists(external):
+        return list(DEFAULT_DIRECTIONS)
+
+    try:
+        with open(external, encoding="utf-8") as f:
+            raw = json.load(f)
+        result = []
+        for item in raw:
+            if isinstance(item, str):
+                result.append((item, item))
+            elif isinstance(item, dict) and item.get("word"):
+                result.append((item.get("label", item["word"]), item["word"]))
+        return result or list(DEFAULT_DIRECTIONS)
+    except Exception:
+        return list(DEFAULT_DIRECTIONS)
+
+
 def build_search_list(base_query, scope):
     """Return a list of (label, full_query) tuples for the chosen scope.
 

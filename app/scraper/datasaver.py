@@ -61,7 +61,7 @@ class DataSaver:
             elif self.outputFormat == "json":
                 dataFrame.to_json(joinedPath, indent=4, orient="records")
 
-            Communicator.show_message(f"Done! Scraped data saved successfully. Total records: {totalRecords}. Tool by SafeerAhmad.")
+            Communicator.show_message(f"Done! Scraped data saved successfully. Total records: {totalRecords}. LeadScrapper by Safeer Ahmad.")
 
             return joinedPath
 
