@@ -61,9 +61,12 @@ class DataSaver:
             elif self.outputFormat == "json":
                 dataFrame.to_json(joinedPath, indent=4, orient="records")
 
-            Communicator.show_message(f"Hurrah! Scraped data successfully saved! Total records saved: {totalRecords}. If you're loving this free tool, consider fueling us with a coffee! Your support helps us keep democratizing automation. ☕️ Support us here: https://www.buymeacoffee.com/zubdata")
-            
+            Communicator.show_message(f"Done! Scraped data saved successfully. Total records: {totalRecords}. Tool by SafeerAhmad.")
+
+            return joinedPath
+
         else:
             Communicator.show_error_message("Oops! Could not scrape the data because you did not scrape any record.",{ERROR_CODES['NO_RECORD_TO_SAVE']})
+            return None
 
 

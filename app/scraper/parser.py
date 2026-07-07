@@ -4,6 +4,9 @@ from scraper.communicator import Communicator
 from scraper.datasaver import DataSaver
 from scraper.base import Base
 from scraper.common import Common
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.by import By
 import requests
 import re
 
@@ -30,9 +33,20 @@ class Parser(Base):
         Details sheet means that business details card when you click on a business in 
         serach results in google maps"""
 
+        try:
+            WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "[role='main']"))
+            )
+        except:
+            pass
+
         infoSheet = self.driver.execute_script(
             """return document.querySelector("[role='main']")"""
         )
+
+        if infoSheet is None:
+            return
+
         try:
             # Initialize data points
             (
@@ -171,7 +185,7 @@ class Parser(Base):
             source_code = requests.get(url, headers=headers, timeout=(10))
             curr = source_code.url
 
-            original_curr = curr
+            original_curr = curr.rstrip("/")
             plain_text = source_code.text
             match = re.findall(
                 r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", plain_text
@@ -181,7 +195,7 @@ class Parser(Base):
                 urls = [original_curr + "/contact/", original_curr + "/Contact/"]
                 for cu in urls:
                     curr = cu
-                    source_code = requests.get(url, headers=headers, timeout=(10))
+                    source_code = requests.get(cu, headers=headers, timeout=(10))
                     plain_text = source_code.text
                     match = re.findall(
                         r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", plain_text
@@ -233,6 +247,29 @@ class Parser(Base):
         except Exception as e:
             Communicator.show_message(f"Error in find_mail: {e}")
         return ""
+
+    def parse_links(self, allResultsLinks):
+        """Parse each result link into self.finalData without saving.
+
+        finalData accumulates across calls so a single Parser instance can
+        gather results from several region searches before the caller dedupes
+        and saves them once."""
+        Communicator.show_message(
+            "Scrolling is done. Now going to scrape each location"
+        )
+        try:
+            for resultLink in allResultsLinks:
+                if Common.close_thread_is_set():
+                    self.driver.quit()
+                    return self.finalData
+
+                self.openingurl(url=resultLink)
+                self.parse()
+        except Exception as e:
+            Communicator.show_message(
+                f"Error occurred while parsing the locations. Error: {str(e)}"
+            )
+        return self.finalData
 
     def main(self, allResultsLinks):
         Communicator.show_message(

@@ -22,13 +22,19 @@ class Scroller:
 
     
     def scroll(self):
-        """In case search results are not available"""
+        """Scroll the results feed and return the list of result links.
+
+        Returns an empty list when there are no results. Parsing/saving is done
+        by the caller so results from several searches can be merged."""
+
+        self.__allResultsLinks = []
 
         scrollAbleElement = self.driver.execute_script(
                 """return document.querySelector("[role='feed']")"""
             )
         if scrollAbleElement is None:
             Communicator.show_message(message="We are sorry but, No results found for your search query on googel maps....")
+            return []
 
         else:
             Communicator.show_message(message="Starting scrolling")
@@ -75,7 +81,16 @@ class Scroller:
                         except JavascriptException:
                             pass
                     else:
-
+                        # capture the final batch of links before breaking
+                        finalElement = self.driver.execute_script(
+                            """return document.querySelector("[role='feed']")"""
+                        )
+                        if finalElement:
+                            finalSoup = BeautifulSoup(
+                                finalElement.get_attribute('outerHTML'), 'html.parser')
+                            finalAnchors = finalSoup.find_all('a', class_='hfpxzc')
+                            self.__allResultsLinks = [a.get('href') for a in finalAnchors]
+                        Communicator.show_message(f"Scrolling done! Total locations found: {len(self.__allResultsLinks)}")
                         break
                 else:
                     last_height = new_height
@@ -91,7 +106,7 @@ class Scroller:
                     
                     Communicator.show_message(f"Total locations scrolled: {len(self.__allResultsLinks)}")
 
-            self.start_parsing()
+            return self.__allResultsLinks
 
 
                     

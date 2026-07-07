@@ -3,7 +3,16 @@
     "allow": [
       "Bash(dir:*)",
       "Bash(pip install:*)",
-      "Bash(python -m pip install:*)"
+      "Bash(python -m pip install:*)",
+      "Bash(.\\\\venv\\\\Scripts\\\\activate)",
+      "Bash(venv/Scripts/python.exe -m pip install pyinstaller)",
+      "Bash(curl -sL -o world-cities.csv \"https://raw.githubusercontent.com/datasets/world-cities/master/data/world-cities.csv\")",
+      "Bash(mkdir -p app/data)",
+      "Bash(venv/Scripts/python.exe -c ' *)",
+      "Bash(../venv/Scripts/python.exe -c ' *)",
+      "Bash(venv/Scripts/python.exe --version)",
+      "Bash(venv/Scripts/pip.exe list *)",
+      "Bash(venv/Scripts/python.exe -m PyInstaller ScraperSuite.spec --noconfirm --distpath dist --workpath build)"
     ],
     "deny": [],
     "ask": []

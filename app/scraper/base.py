@@ -2,7 +2,8 @@ from selenium.webdriver.support.ui import WebDriverWait
 from time import sleep
 from selenium.webdriver.support import expected_conditions as Ec
 from selenium.common.exceptions import (
-    WebDriverException
+    WebDriverException,
+    TimeoutException,
 )
 from .common import Common
 
@@ -21,6 +22,12 @@ class Base:
 
             try:
                 self.driver.get(url)
+            except TimeoutException:
+                try:
+                    self.driver.execute_script("window.stop();")
+                except:
+                    pass
+                break
             except WebDriverException:
                 sleep(5)
                 continue
