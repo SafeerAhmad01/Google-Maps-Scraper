@@ -101,7 +101,7 @@ class Backend(Base):
         Communicator.set_backend_object(self)
 
 
-    def init_driver(self):
+    def init_driver(self, quiet=False):
         options = uc.ChromeOptions()
         if self.headlessMode == 1:
                 options.headless = True
@@ -109,10 +109,11 @@ class Backend(Base):
         prefs = {"profile.managed_default_content_settings.images": 2}
         options.add_experimental_option("prefs", prefs)
 
-        Communicator.show_message("Wait checking for driver...\nIf you don't have webdriver in your machine it will install it")
+        if not quiet:
+            Communicator.show_message("Wait checking for driver...\nIf you don't have webdriver in your machine it will install it")
 
         major = _chrome_major_version()
-        if major:
+        if major and not quiet:
             Communicator.show_message(
                 f"Detected Chrome version {major}. Getting the matching driver...")
 
@@ -138,9 +139,26 @@ class Backend(Base):
                 raise
 
         self.driver.set_page_load_timeout(30)
-        Communicator.show_message("Opening browser...")
+        self.driver.set_script_timeout(30)
+        if not quiet:
+            Communicator.show_message("Opening browser...")
         self.driver.maximize_window()
         self.driver.implicitly_wait(self.timeout)
+
+    def _restart_driver(self):
+        """Close the current Chrome and open a brand-new session.
+
+        Google throttles a session after several rapid searches (results stop
+        loading past ~20 and scripts start timing out). A fresh browser per file
+        avoids that degraded/blocked state."""
+        try:
+            if getattr(self, "driver", None):
+                self.driver.quit()
+        except Exception:
+            pass
+        Communicator.show_message("Opening a fresh Chrome session...")
+        self.init_driver(quiet=True)
+        self.scroller = Scroller(driver=self.driver)
 
 
 
@@ -275,6 +293,12 @@ class Backend(Base):
         for index, word in enumerate(self.directions, start=1):
             if Common.close_thread_is_set():
                 break
+
+            # Fresh Chrome session for every file (except the first, which the
+            # constructor already opened) so Google doesn't throttle us.
+            if index > 1:
+                self._restart_driver()
+                sleep(2)
 
             direction_query = f"{self.base_query} {word}".strip()
             # DataSaver + history use self.searchquery for the file name, so point it

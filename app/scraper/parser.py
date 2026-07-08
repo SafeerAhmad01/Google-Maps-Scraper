@@ -602,18 +602,19 @@ class Parser(Base):
         Communicator.show_message(
             "Scrolling is done. Now going to scrape each location"
         )
-        try:
-            for resultLink in allResultsLinks:
-                if Common.close_thread_is_set():
-                    self.driver.quit()
-                    return self.finalData
+        for resultLink in allResultsLinks:
+            if Common.close_thread_is_set():
+                return self.finalData
 
+            # Isolate each location: a timeout/error on one shouldn't abort the
+            # rest of the file.
+            try:
                 self.openingurl(url=resultLink)
                 self.parse()
-        except Exception as e:
-            Communicator.show_message(
-                f"Error occurred while parsing the locations. Error: {str(e)}"
-            )
+            except Exception as e:
+                Communicator.show_message(
+                    f"Skipped a location (error): {str(e)[:120]}")
+                continue
         return self.finalData
 
     def main(self, allResultsLinks):
