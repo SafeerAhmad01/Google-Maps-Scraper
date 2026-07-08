@@ -682,12 +682,21 @@ class Frontend:
             logging.getLogger("activity").info(text.replace("\n", " | "))
         except Exception:
             pass
-        if hasattr(self, "show_text"):
-            self.show_text.config(state="normal")
-            self.show_text.insert(tk.END, "›  ", "arrow")
-            self.show_text.insert(tk.END, text + "\n\n", "msg")
-            self.show_text.see(tk.END)
-            self.show_text.config(state="disabled")
+        # Messages arrive from worker threads; marshal the widget update onto the
+        # Tk main loop so the on-screen log repaints reliably (and live).
+        try:
+            self.root.after(0, self._append_log_widget, text)
+        except Exception:
+            pass
+
+    def _append_log_widget(self, text):
+        if not hasattr(self, "show_text"):
+            return
+        self.show_text.config(state="normal")
+        self.show_text.insert(tk.END, "›  ", "arrow")
+        self.show_text.insert(tk.END, text + "\n\n", "msg")
+        self.show_text.see(tk.END)
+        self.show_text.config(state="disabled")
 
     def messageshowing(self, message):
         self.__log(message)

@@ -599,10 +599,12 @@ class Parser(Base):
         finalData accumulates across calls so a single Parser instance can
         gather results from several region searches before the caller dedupes
         and saves them once."""
+        total = len(allResultsLinks)
         Communicator.show_message(
-            "Scrolling is done. Now going to scrape each location"
+            f"Scrolling is done. Now scraping {total} locations "
+            f"(also visiting their websites for emails/socials — this takes a bit)."
         )
-        for resultLink in allResultsLinks:
+        for i, resultLink in enumerate(allResultsLinks, start=1):
             if Common.close_thread_is_set():
                 return self.finalData
 
@@ -615,6 +617,12 @@ class Parser(Base):
                 Communicator.show_message(
                     f"Skipped a location (error): {str(e)[:120]}")
                 continue
+
+            # Live progress so the log/window doesn't look frozen during parsing.
+            if i % 3 == 0 or i == total:
+                Communicator.show_message(
+                    f"Scraped {i}/{total} locations "
+                    f"({len(self.finalData)} saved so far)...")
         return self.finalData
 
     def main(self, allResultsLinks):
