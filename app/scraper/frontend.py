@@ -799,7 +799,12 @@ class Frontend:
         entry = tk.Entry(inner, textvariable=textvar, font=("Segoe UI", 10),
                          bg=C["input"], fg=C["text"], insertbackground=C["accent"],
                          relief="flat", width=width)
-        entry.pack(fill="x", ipady=5, padx=8)
+        entry.pack(side="left", fill="x", ipady=5, padx=(8, 0))
+
+        # Dropdown-arrow button — click it to see the FULL list without typing.
+        arrow = tk.Label(inner, text="▾", font=("Segoe UI", 10), fg=C["dim"],
+                         bg=C["input"], cursor="hand2", padx=6)
+        arrow.pack(side="left")
 
         lb = tk.Listbox(self._geo_card, font=("Segoe UI", 10), height=8,
                         bg=C["surface"], fg=C["text"],
@@ -819,6 +824,10 @@ class Frontend:
                 lb.lift()
             else:
                 hide()
+
+        def show_all(_=None):
+            entry.focus_set()
+            show(list(source_fn() or []))
 
         def on_key(e):
             if e.keysym in ("Return", "Tab", "Escape"):
@@ -847,6 +856,7 @@ class Frontend:
 
         entry.bind("<KeyRelease>", on_key)
         entry.bind("<FocusOut>", lambda e: box.after(250, hide))
+        arrow.bind("<Button-1>", show_all)
         lb.bind("<ButtonRelease-1>", pick)
         lb.bind("<Return>", pick)
         return box
