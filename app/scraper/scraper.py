@@ -420,9 +420,9 @@ class Backend(Base):
         """Search each neighborhood of a city; one file each, ticked as done."""
         total = len(self.locations)
         Communicator.show_message(
-            f"City mode: {self.city_name} — {total} neighborhoods, one file each.")
+            f"Location mode: {self.city_name} — {total} cities, one file each.")
         Communicator.set_progress(0, total,
-                                  f"{self.city_name}: 0/{total} neighborhoods")
+                                  f"{self.city_name}: 0/{total} cities")
 
         for index, hood in enumerate(self.locations, start=1):
             if Common.close_thread_is_set():

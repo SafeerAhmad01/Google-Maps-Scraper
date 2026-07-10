@@ -8,7 +8,7 @@ from tkinter import ttk, WORD
 from scraper.scraper import Backend
 from scraper.web_scraper import WebSearchBackend
 from scraper.common import Common
-from scraper import regions, history
+from scraper import regions, history, geodata
 from scraper.resource import resource_path
 from scraper import applog
 import threading
@@ -158,13 +158,13 @@ class Frontend:
         self.selectAllVar = tk.IntVar()
         self.alsoWebVar = tk.IntVar()
 
-        # City -> Neighborhoods (OSM) state (persists across theme rebuilds)
+        # Country -> State -> City state (persists across theme rebuilds)
         self.cityCountryVar = tk.StringVar()
-        self.cityVar = tk.StringVar()
+        self.stateVar = tk.StringVar()
         self.selectAllLocVar = tk.IntVar()
         self.locSearchVar = tk.StringVar()
-        self._loaded_city = ""
-        self._city_hoods = []          # neighborhood names currently loaded
+        self._geo_region_label = ""    # "State, Country" used to build city queries
+        self._city_hoods = []          # city names currently loaded
         self._city_vars = {}           # name -> IntVar (persist)
         self._city_status = {}         # name -> status text
         self._loc_rows = {}            # name -> status Label (rebuilt each build)
@@ -391,50 +391,8 @@ class Frontend:
         tk.Label(cb_row, text="Enable", font=("Segoe UI", 10),
                  fg=C["dim"], bg=C["card"]).pack(side="left", padx=(4, 0))
 
-        # ── Option 1: City → Neighborhoods (OSM) ──────────────────────────────
-        self._build_city_section(card)
-
-        # ── Option 2: Direction split ─────────────────────────────────────────
-        tk.Frame(card, bg=C["card"], height=16).pack()
-        self._section_label(
-            card, "2)  Direction Split  (separate file per direction)",
-            "Tick directions to run each as its own search and save a SEPARATE "
-            "file (e.g. 'travel agent in usa North'). Used only if no City "
-            "neighborhoods are selected above.")
-
-        tk.Checkbutton(
-            card, text="Select All", variable=self.selectAllVar,
-            command=self._toggle_all_directions,
-            font=("Segoe UI", 10, "bold"), fg=C["accent"], bg=C["card"],
-            activebackground=C["card"], activeforeground=C["accent"],
-            selectcolor=C["border"], relief="flat", highlightthickness=0,
-            anchor="w").pack(anchor="w", padx=20, pady=(2, 2))
-
-        grid = tk.Frame(card, bg=C["card"])
-        grid.pack(fill="x", padx=20, pady=(2, 0))
-        for idx, (label, word) in enumerate(self._direction_defs):
-            cb = tk.Checkbutton(
-                grid, text=label, variable=self.directionVars[word],
-                font=("Segoe UI", 9), fg=C["text"], bg=C["card"],
-                activebackground=C["card"], activeforeground=C["accent"],
-                selectcolor=C["border"], relief="flat", highlightthickness=0,
-                anchor="w")
-            r, col = divmod(idx, 4)
-            cb.grid(row=r, column=col, sticky="w", padx=(0, 14), pady=1)
-
-        # ── Option 3: Region scope ────────────────────────────────────────────
-        tk.Frame(card, bg=C["card"], height=16).pack()
-        self._section_label(
-            card, "3)  Region Scope",
-            "None = one search (max ~120). Pick a country or 'All countries' to "
-            "auto-search every city and merge. Used only if City & Directions "
-            "are both empty.")
-        self.regionScopeButton = ttk.Combobox(
-            card, values=regions.scope_choices(), textvariable=self.regionScopeVar,
-            state="readonly", font=("Segoe UI", 11), style="G.TCombobox")
-        if not self.regionScopeVar.get():
-            self.regionScopeVar.set(regions.SIMPLE)
-        self.regionScopeButton.pack(fill="x", padx=20)
+        # ── Location: Country → State → City (offline dataset) ────────────────
+        self._build_geo_section(card)
 
         # Also run Web Search alongside (extra files, merged into MAIN)
         tk.Frame(card, bg=C["card"], height=12).pack()
@@ -755,26 +713,17 @@ class Frontend:
         self.searchQuery        = self.searchQuery.lower()
         self.outputFormatValue  = self.outputFormatValue.lower()
         self.headlessMode       = self.healdessCheckBoxVar.get()
-        self.regionScope        = self.regionScopeVar.get() or regions.SIMPLE
-        self.selectedDirections = [word for word, var in self.directionVars.items()
-                                   if var.get()]
         self.runWeb             = bool(self.alsoWebVar.get())
         self.selectedLocations  = [h for h in self._city_hoods
                                    if self._city_vars.get(h) and self._city_vars[h].get()]
-        self.cityName           = self._loaded_city
+        self.cityName           = self._geo_region_label
 
         if self.selectedLocations:
-            self.__log(f"City mode: {self.cityName} — {len(self.selectedLocations)} "
-                       f"neighborhoods → {len(self.selectedLocations)} files "
-                       f"(overrides Region Scope + Directions).")
-        elif self.selectedDirections:
-            self.__log(f"Direction mode: {len(self.selectedDirections)} directions "
-                       f"→ {len(self.selectedDirections)} separate files. "
-                       f"(Region Scope is ignored.)")
-        elif self.regionScope == regions.ALL:
-            self.__log("Heads up: 'All countries' runs tens of thousands of "
-                       "searches and can take a very long time. You can stop by "
-                       "closing the window.")
+            self.__log(f"Location mode: {len(self.selectedLocations)} cities in "
+                       f"{self.cityName} → {len(self.selectedLocations)} files, "
+                       f"all merged into MAIN.")
+        else:
+            self.__log("No cities selected — running a single search of your query.")
 
         self._maps_thread = threading.Thread(target=self._run_maps, daemon=True)
         self._maps_thread.start()
@@ -782,8 +731,8 @@ class Frontend:
     def _run_maps(self):
         backend = Backend(self.searchQuery, self.outputFormatValue,
                           healdessmode=self.headlessMode,
-                          region_scope=self.regionScope,
-                          directions=self.selectedDirections,
+                          region_scope=None,
+                          directions=[],
                           run_web=self.runWeb,
                           locations=self.selectedLocations,
                           city_name=self.cityName)
@@ -838,53 +787,101 @@ class Frontend:
         for var in self.directionVars.values():
             var.set(value)
 
-    # ── City → Neighborhoods (OSM) ──────────────────────────────────────────────
-    def _build_city_section(self, card):
+    # ── Location: Country → State → City (offline dataset) ────────────────────────
+    def _autocomplete(self, parent, textvar, source_fn, on_select, width=22):
+        """A type-to-filter box: an Entry with a Listbox that drops down as you
+        type. The Listbox never steals focus, so typing keeps working; click an
+        item (or Enter) to pick it."""
         C = self.C
+        box = tk.Frame(parent, bg=C["border"])
+        inner = tk.Frame(box, bg=C["input"])
+        inner.pack(padx=1, pady=1)
+        entry = tk.Entry(inner, textvariable=textvar, font=("Segoe UI", 10),
+                         bg=C["input"], fg=C["text"], insertbackground=C["accent"],
+                         relief="flat", width=width)
+        entry.pack(fill="x", ipady=5, padx=8)
+
+        lb = tk.Listbox(self._geo_card, font=("Segoe UI", 10), height=8,
+                        bg=C["surface"], fg=C["text"],
+                        selectbackground=C["accent_soft"], selectforeground=C["text"],
+                        relief="solid", bd=1, highlightthickness=0,
+                        activestyle="none", exportselection=False)
+
+        def hide():
+            lb.place_forget()
+
+        def show(items):
+            lb.delete(0, tk.END)
+            for it in items[:60]:
+                lb.insert(tk.END, it)
+            if items:
+                lb.place(in_=entry, x=0, rely=1.0, y=2, relwidth=1.0)
+                lb.lift()
+            else:
+                hide()
+
+        def on_key(e):
+            if e.keysym in ("Return", "Tab", "Escape"):
+                hide()
+                return
+            if e.keysym == "Down" and lb.winfo_ismapped():
+                lb.focus_set()
+                if not lb.curselection():
+                    lb.selection_set(0)
+                    lb.activate(0)
+                return
+            typed = textvar.get().strip().lower()
+            src = source_fn() or []
+            matches = [x for x in src if typed in x.lower()] if typed else list(src)
+            show(matches)
+
+        def pick(_=None):
+            sel = lb.curselection()
+            if sel:
+                textvar.set(lb.get(sel[0]))
+            hide()
+            entry.focus_set()
+            entry.icursor(tk.END)
+            if on_select:
+                on_select()
+
+        entry.bind("<KeyRelease>", on_key)
+        entry.bind("<FocusOut>", lambda e: box.after(250, hide))
+        lb.bind("<ButtonRelease-1>", pick)
+        lb.bind("<Return>", pick)
+        return box
+
+    def _state_source(self):
+        states = geodata.get_states(self.cityCountryVar.get().strip())
+        return (["★ All cities in country"] + states) if states else states
+
+    def _build_geo_section(self, card):
+        C = self.C
+        self._geo_card = card
         tk.Frame(card, bg=C["card"], height=6).pack()
         self._section_label(
-            card, "1)  🏙️  City → Neighborhoods  (OSM — top priority)",
-            "Type/search a country + city, click Load, then tick the neighborhoods "
-            "you want. Each becomes its own file, all merged into MAIN. If you tick "
-            "any here, it overrides Direction & Region below.")
+            card, "📍  Location  (Country ▸ State ▸ City)",
+            "Pick a country, then a state — its cities appear as checkboxes below. "
+            "Tick the cities you want (or Select All). Each city becomes its own "
+            "file, all merged into MAIN. Leave blank to just search your query once.")
 
         rowf = tk.Frame(card, bg=C["card"])
         rowf.pack(fill="x", padx=20)
-
-        # Searchable Country box (type to filter)
-        self._all_countries = regions.get_countries()
-        self.cityCountryButton = ttk.Combobox(
-            rowf, values=self._all_countries, textvariable=self.cityCountryVar,
-            width=20, font=("Segoe UI", 10), style="G.TCombobox")
-        self.cityCountryButton.pack(side="left")
-        self.cityCountryButton.bind("<KeyRelease>", self._filter_country)
-        self.cityCountryButton.bind("<<ComboboxSelected>>",
-                                    lambda e: self._on_country_pick())
-
-        # Searchable City box (type to filter)
-        self.cityButton = ttk.Combobox(
-            rowf, textvariable=self.cityVar, width=20, font=("Segoe UI", 10),
-            style="G.TCombobox")
-        self.cityButton.pack(side="left", padx=(8, 8))
-        self.cityButton.bind("<KeyRelease>", self._filter_city)
-
-        load = tk.Label(rowf, text="🔍  Load", font=("Segoe UI", 9, "bold"),
-                        fg="white", bg=C["btn"], padx=12, pady=5, cursor="hand2")
-        load.pack(side="left")
-        load.bind("<Button-1>", lambda e: self._load_locations())
+        self._autocomplete(rowf, self.cityCountryVar, geodata.get_countries,
+                           self._on_country_pick, 22).pack(side="left")
+        tk.Label(rowf, text="  ▸  ", font=("Segoe UI", 11, "bold"),
+                 fg=C["dim"], bg=C["card"]).pack(side="left")
+        self._autocomplete(rowf, self.stateVar, self._state_source,
+                           self._on_state_pick, 22).pack(side="left")
 
         self._city_done_lbl = tk.Label(
             card, text=self._city_done_text, font=("Segoe UI", 9, "bold"),
             fg=C["success"], bg=C["card"], anchor="w")
         self._city_done_lbl.pack(fill="x", padx=20, pady=(6, 0))
 
-        # Populate the city dropdown for the remembered country
-        if self.cityCountryVar.get():
-            self._on_country_pick()
-
-        # Search bar to filter the neighborhood checkboxes
+        # City checklist: search + select all + list
         self._loc_search_row = tk.Frame(card, bg=C["card"])
-        tk.Label(self._loc_search_row, text="Search locations:",
+        tk.Label(self._loc_search_row, text="Search cities:",
                  font=("Segoe UI", 9), fg=C["dim"], bg=C["card"]).pack(side="left")
         loc_search = tk.Entry(self._loc_search_row, textvariable=self.locSearchVar,
                               font=("Segoe UI", 10), bg=C["input"], fg=C["text"],
@@ -893,7 +890,7 @@ class Frontend:
         loc_search.bind("<KeyRelease>", lambda e: self._render_locations())
 
         self._loc_select_all = tk.Checkbutton(
-            card, text="Select All Neighborhoods", variable=self.selectAllLocVar,
+            card, text="Select All Cities", variable=self.selectAllLocVar,
             command=self._toggle_all_locations, font=("Segoe UI", 9, "bold"),
             fg=C["accent"], bg=C["card"], activebackground=C["card"],
             activeforeground=C["accent"], selectcolor=C["border"], relief="flat",
@@ -903,75 +900,38 @@ class Frontend:
         self._loc_list.pack(fill="x", padx=20, pady=(2, 0))
         self._render_locations()
 
-    @staticmethod
-    def _post_combo(combo):
-        """Open (drop down) a combobox's list without needing the arrow click."""
-        try:
-            combo.tk.call("ttk::combobox::Post", combo)
-        except Exception:
-            pass
-
-    def _filter_country(self, event=None):
-        # Don't hijack navigation keys
-        if event and event.keysym in ("Up", "Down", "Return", "Tab", "Escape"):
-            return
-        typed = self.cityCountryVar.get().lower()
-        matches = [c for c in self._all_countries if typed in c.lower()]
-        self.cityCountryButton["values"] = matches or self._all_countries
-        if typed:
-            self._post_combo(self.cityCountryButton)   # auto-show the list
-        if self.cityCountryVar.get() in self._all_countries:
-            self._on_country_pick()
-
-    def _filter_city(self, event=None):
-        if event and event.keysym in ("Up", "Down", "Return", "Tab", "Escape"):
-            return
-        typed = self.cityVar.get().lower()
-        allc = regions.get_cities(self.cityCountryVar.get())
-        self.cityButton["values"] = [c for c in allc if typed in c.lower()] or allc
-        if typed:
-            self._post_combo(self.cityButton)          # auto-show the list
-
     def _on_country_pick(self):
-        try:
-            self.cityButton["values"] = regions.get_cities(self.cityCountryVar.get())
-        except Exception:
-            self.cityButton["values"] = []
-
-    def _load_locations(self):
-        city = self.cityVar.get().strip()
-        country = self.cityCountryVar.get().strip()
-        if not city:
-            self.__log("Pick or type a city first, then click Load Locations.")
-            return
-        self.__log(f"Fetching neighborhoods of {city} from OpenStreetMap...")
-        threading.Thread(target=self._load_locations_worker,
-                         args=(city, country), daemon=True).start()
-
-    def _load_locations_worker(self, city, country):
-        try:
-            from scraper import osm
-            hoods = osm.get_neighborhoods(city, country)
-        except Exception:
-            hoods = []
-        self.root.after(0, self._on_locations_loaded, city, hoods)
-
-    def _on_locations_loaded(self, city, hoods):
-        self._loaded_city = city
-        self._city_hoods = hoods
-        self._city_vars = {h: tk.IntVar(value=1) for h in hoods}
-        self._city_status = {h: "queued" for h in hoods}
+        self.stateVar.set("")
+        self._geo_region_label = ""
+        self._city_hoods = []
+        self._city_vars = {}
+        self._city_status = {}
         self._city_done_text = ""
         if hasattr(self, "_city_done_lbl"):
             self._city_done_lbl.config(text="")
         self._render_locations()
-        if hoods:
-            self.__log(f"Loaded {len(hoods)} neighborhoods for {city}. Tick the ones "
-                       f"you want, then press Start Scraping. (City mode overrides "
-                       f"Region Scope + Directions.)")
+
+    def _on_state_pick(self):
+        country = self.cityCountryVar.get().strip()
+        state = self.stateVar.get().strip()
+        if not country or not state:
+            return
+        if state.startswith("★"):
+            cities = geodata.all_cities(country)
+            self._geo_region_label = country
         else:
-            self.__log(f"OpenStreetMap found no neighborhoods for '{city}'. "
-                       f"Check the spelling/country, or just search the whole city.")
+            cities = geodata.get_cities(country, state)
+            self._geo_region_label = f"{state}, {country}"
+        self._city_hoods = cities
+        self._city_vars = {c: tk.IntVar(value=1) for c in cities}
+        self._city_status = {c: "queued" for c in cities}
+        self._city_done_text = ""
+        self.locSearchVar.set("")
+        if hasattr(self, "_city_done_lbl"):
+            self._city_done_lbl.config(text="")
+        self._render_locations()
+        self.__log(f"{len(cities)} cities loaded for {self._geo_region_label}. "
+                   f"Tick the ones you want (or Select All), then Start Scraping.")
 
     def _render_locations(self):
         if not hasattr(self, "_loc_list"):
@@ -995,11 +955,14 @@ class Frontend:
         query = self.locSearchVar.get().strip().lower()
         visible = [h for h in self._city_hoods if query in h.lower()]
 
-        tk.Label(self._loc_list,
-                 text=f"{len(visible)} of {len(self._city_hoods)} neighborhoods "
-                      f"(checked ones will be scraped):",
-                 font=("Segoe UI", 8), fg=C["dim"], bg=C["card"],
-                 anchor="w").pack(fill="x")
+        CAP = 400
+        shown = visible[:CAP]
+        note = (f"{len(visible)} of {len(self._city_hoods)} cities"
+                + (f" — showing first {CAP}, use search to find others"
+                   if len(visible) > CAP else "")
+                + "  (checked ones will be scraped):")
+        tk.Label(self._loc_list, text=note, font=("Segoe UI", 8),
+                 fg=C["dim"], bg=C["card"], anchor="w").pack(fill="x")
 
         # Grid of columns to use the full width (not one item per row)
         gridf = tk.Frame(self._loc_list, bg=C["card"])
@@ -1008,7 +971,7 @@ class Frontend:
         for c in range(cols):
             gridf.columnconfigure(c, weight=1, uniform="loc")
 
-        for i, h in enumerate(visible):
+        for i, h in enumerate(shown):
             var = self._city_vars.get(h)
             if var is None:
                 var = tk.IntVar(value=1)
@@ -1054,7 +1017,7 @@ class Frontend:
         self.root.after(0, self._set_city_done, name)
 
     def _set_city_done(self, name):
-        self._city_done_text = f"✓  {name} — all neighborhoods done"
+        self._city_done_text = f"✓  {name} — all cities done"
         if hasattr(self, "_city_done_lbl"):
             self._city_done_lbl.config(text=self._city_done_text, fg=self.C["success"])
 
