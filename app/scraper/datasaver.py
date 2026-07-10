@@ -13,12 +13,17 @@ class DataSaver:
     def __init__(self) -> None:
         self.outputFormat = Communicator.get_output_format()
 
-    def save(self, datalist):
+    def save(self, datalist, output_dir=None):
         """
         This function will save the data that has been scrapped.
         This can be call if any error occurs while scraping , or if scraping is done successfully.
         In both cases we have to save the scraped data.
+
+        output_dir: folder to save into (defaults to OUTPUT_PATH). Used so all
+        files from one search land in that search's own folder.
         """
+
+        base_dir = output_dir or OUTPUT_PATH
 
         if len(datalist) > 0:
             Communicator.show_message("Saving the scraped data")
@@ -35,18 +40,18 @@ class DataSaver:
                 extension = ".csv"
             elif self.outputFormat == "json":
                 extension = ".json"
-                
+
              # Create the output directory if it does not exist
-            if not os.path.exists(OUTPUT_PATH):
-                os.makedirs(OUTPUT_PATH)
-            joinedPath = OUTPUT_PATH + filename + extension
+            if not os.path.exists(base_dir):
+                os.makedirs(base_dir)
+            joinedPath = os.path.join(base_dir, filename + extension)
 
             if os.path.exists(joinedPath):
                 index = 1
                 while True:
                     filename = f"{searchQuery} - GMS output ({index})"
 
-                    joinedPath = OUTPUT_PATH + filename + extension
+                    joinedPath = os.path.join(base_dir, filename + extension)
 
                     if os.path.exists(joinedPath):
                         index += 1

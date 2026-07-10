@@ -15,7 +15,9 @@
       "Bash(venv/Scripts/python.exe -m PyInstaller ScraperSuite.spec --noconfirm --distpath dist --workpath build)",
       "Bash(venv/Scripts/python.exe -c \"import PIL; print\\('Pillow', PIL.__version__\\)\")",
       "Bash(venv/Scripts/python.exe -m pip install pillow)",
-      "Bash(venv/Scripts/python.exe -m pip install dnspython)"
+      "Bash(venv/Scripts/python.exe -m pip install dnspython)",
+      "Bash(PYTHONIOENCODING=utf-8 ../venv/Scripts/python.exe -c ' *)",
+      "Bash(PYTHONIOENCODING=utf-8 timeout 120 venv/Scripts/python.exe tools/build_neighborhoods.py --country \"United Kingdom\" --limit 3 --out \"C:/Users/dell/AppData/Local/Temp/claude/C--Users-dell-Documents-Google-Maps-Scraper/8cc46f2a-6d92-4e9f-90c3-4c82ca2256fe/scratchpad/nb_test.json\" --sleep 1)"
     ],
     "deny": [],
     "ask": []

@@ -32,11 +32,12 @@ SESS.headers.update({
 
 class WebSearchBackend:
 
-    def __init__(self, query, output_format, max_results, on_done):
+    def __init__(self, query, output_format, max_results, on_done, output_dir=None):
         self.query         = query
         self.output_format = output_format
         self.max_results   = max_results
         self.on_done       = on_done
+        self.output_dir    = output_dir or OUTPUT_PATH
         self.results       = []
 
     # ── Filter ────────────────────────────────────────────────────────────────
@@ -287,15 +288,16 @@ class WebSearchBackend:
             self.output_format, '.xlsx')
         filename = f"{self.query} - WebSearch output"
 
-        if not os.path.exists(OUTPUT_PATH):
-            os.makedirs(OUTPUT_PATH)
+        out_dir = self.output_dir
+        if not os.path.exists(out_dir):
+            os.makedirs(out_dir)
 
-        path = os.path.join(OUTPUT_PATH, filename + ext)
+        path = os.path.join(out_dir, filename + ext)
         if os.path.exists(path):
             idx = 1
-            while os.path.exists(os.path.join(OUTPUT_PATH, f"{filename} ({idx}){ext}")):
+            while os.path.exists(os.path.join(out_dir, f"{filename} ({idx}){ext}")):
                 idx += 1
-            path = os.path.join(OUTPUT_PATH, f"{filename} ({idx}){ext}")
+            path = os.path.join(out_dir, f"{filename} ({idx}){ext}")
 
         if self.output_format == 'excel':
             df.to_excel(path, index=False)

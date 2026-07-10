@@ -39,6 +39,19 @@ class Communicator:
             cls.__frontend_object.update_progress(current, total, message)
 
     @classmethod
+    def mark_location_status(cls, name, status):
+        """Update the tick/status of one neighborhood row in the City checklist."""
+        fo = cls.__frontend_object
+        if fo is not None and hasattr(fo, "mark_location_status"):
+            fo.mark_location_status(name, status)
+
+    @classmethod
+    def mark_city_done(cls, name):
+        fo = cls.__frontend_object
+        if fo is not None and hasattr(fo, "mark_city_done"):
+            fo.mark_city_done(name)
+
+    @classmethod
     def get_output_format(cls):
         return cls.__frontend_object.outputFormatValue
     

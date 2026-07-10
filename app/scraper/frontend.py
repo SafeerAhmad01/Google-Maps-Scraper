@@ -23,14 +23,14 @@ THEMES = {
         "border": "#30363d", "accent": "#58a6ff", "accent_soft": "#1f4068",
         "text": "#e6edf3", "dim": "#7d8590", "input": "#0d1117",
         "btn": "#238636", "btn_hover": "#2ea043", "btn_dis": "#14532d",
-        "success": "#3fb950", "log_fg": "#adbac7",
+        "success": "#3fb950", "log_fg": "#adbac7", "warning": "#d29922",
     },
     "light": {
-        "bg": "#eef1f5", "surface": "#ffffff", "card": "#ffffff",
-        "border": "#d0d7de", "accent": "#0969da", "accent_soft": "#ddf4ff",
-        "text": "#1f2328", "dim": "#656d76", "input": "#f6f8fa",
-        "btn": "#1f883d", "btn_hover": "#1a7f37", "btn_dis": "#94d3a2",
-        "success": "#1a7f37", "log_fg": "#24292f",
+        "bg": "#e9f2fc", "surface": "#ffffff", "card": "#ffffff",
+        "border": "#cfe0f2", "accent": "#1a73e8", "accent_soft": "#e3f0ff",
+        "text": "#17202b", "dim": "#5b6b7c", "input": "#f3f8ff",
+        "btn": "#1f9d55", "btn_hover": "#178a48", "btn_dis": "#a8ddbe",
+        "success": "#1a7f37", "log_fg": "#1e2a3a", "warning": "#b26a00",
     },
 }
 
@@ -130,10 +130,16 @@ class Frontend:
             pass
 
         self.root.geometry("920x940")
-        self.root.resizable(False, False)
+        self.root.minsize(860, 600)
+        self.root.resizable(True, True)   # allow maximize / fullscreen
         self.root.title("LeadScrapper by Safeer Ahmad")
 
-        self.theme = "dark"
+        # F11 toggles fullscreen, Esc exits it
+        self._is_fullscreen = False
+        self.root.bind("<F11>", lambda e: self._toggle_fullscreen())
+        self.root.bind("<Escape>", lambda e: self._exit_fullscreen())
+
+        self.theme = "light"
         self.C = THEMES[self.theme]
 
         # Persistent state (survives theme rebuilds automatically)
@@ -150,6 +156,19 @@ class Frontend:
         self.regionScopeVar = tk.StringVar(value=regions.SIMPLE)
         self.healdessCheckBoxVar = tk.IntVar()
         self.selectAllVar = tk.IntVar()
+        self.alsoWebVar = tk.IntVar()
+
+        # City -> Neighborhoods (OSM) state (persists across theme rebuilds)
+        self.cityCountryVar = tk.StringVar()
+        self.cityVar = tk.StringVar()
+        self.selectAllLocVar = tk.IntVar()
+        self.locSearchVar = tk.StringVar()
+        self._loaded_city = ""
+        self._city_hoods = []          # neighborhood names currently loaded
+        self._city_vars = {}           # name -> IntVar (persist)
+        self._city_status = {}         # name -> status text
+        self._loc_rows = {}            # name -> status Label (rebuilt each build)
+        self._city_done_text = ""
         self.webQueryVar = tk.StringVar()
         self.webFormatVar = tk.StringVar()
 
@@ -372,27 +391,16 @@ class Frontend:
         tk.Label(cb_row, text="Enable", font=("Segoe UI", 10),
                  fg=C["dim"], bg=C["card"]).pack(side="left", padx=(4, 0))
 
-        # Region scope
-        tk.Frame(card, bg=C["card"], height=16).pack()
-        self._section_label(
-            card, "Region Scope",
-            "None = one search (max ~120). Pick a country or 'All countries' to "
-            "auto-search every city and merge (slower). With a scope, type only "
-            "the business type, e.g. 'travel agents'.")
-        self.regionScopeButton = ttk.Combobox(
-            card, values=regions.scope_choices(), textvariable=self.regionScopeVar,
-            state="readonly", font=("Segoe UI", 11), style="G.TCombobox")
-        if not self.regionScopeVar.get():
-            self.regionScopeVar.set(regions.SIMPLE)
-        self.regionScopeButton.pack(fill="x", padx=20)
+        # ── Option 1: City → Neighborhoods (OSM) ──────────────────────────────
+        self._build_city_section(card)
 
-        # Direction split
+        # ── Option 2: Direction split ─────────────────────────────────────────
         tk.Frame(card, bg=C["card"], height=16).pack()
         self._section_label(
-            card, "Direction Split  (optional — separate file per direction)",
+            card, "2)  Direction Split  (separate file per direction)",
             "Tick directions to run each as its own search and save a SEPARATE "
-            "file (e.g. 'travel agent in usa North'). If you tick any, this "
-            "overrides Region Scope. Leave all unticked to use Region Scope.")
+            "file (e.g. 'travel agent in usa North'). Used only if no City "
+            "neighborhoods are selected above.")
 
         tk.Checkbutton(
             card, text="Select All", variable=self.selectAllVar,
@@ -413,6 +421,32 @@ class Frontend:
                 anchor="w")
             r, col = divmod(idx, 4)
             cb.grid(row=r, column=col, sticky="w", padx=(0, 14), pady=1)
+
+        # ── Option 3: Region scope ────────────────────────────────────────────
+        tk.Frame(card, bg=C["card"], height=16).pack()
+        self._section_label(
+            card, "3)  Region Scope",
+            "None = one search (max ~120). Pick a country or 'All countries' to "
+            "auto-search every city and merge. Used only if City & Directions "
+            "are both empty.")
+        self.regionScopeButton = ttk.Combobox(
+            card, values=regions.scope_choices(), textvariable=self.regionScopeVar,
+            state="readonly", font=("Segoe UI", 11), style="G.TCombobox")
+        if not self.regionScopeVar.get():
+            self.regionScopeVar.set(regions.SIMPLE)
+        self.regionScopeButton.pack(fill="x", padx=20)
+
+        # Also run Web Search alongside (extra files, merged into MAIN)
+        tk.Frame(card, bg=C["card"], height=12).pack()
+        web_row = tk.Frame(card, bg=C["card"])
+        web_row.pack(anchor="w", padx=20)
+        tk.Checkbutton(web_row, variable=self.alsoWebVar,
+                       bg=C["card"], fg=C["text"], activebackground=C["card"],
+                       activeforeground=C["accent"], selectcolor=C["border"],
+                       relief="flat", highlightthickness=0).pack(side="left")
+        tk.Label(web_row, text="Also run Web Search at the same time "
+                               "(extra files, all merged into the MAIN file)",
+                 font=("Segoe UI", 9), fg=C["dim"], bg=C["card"]).pack(side="left")
 
         tk.Frame(card, bg=C["card"], height=18).pack()
         self.maps_btn = self._btn(card, "▶   Start Scraping", self._maps_submit)
@@ -724,8 +758,16 @@ class Frontend:
         self.regionScope        = self.regionScopeVar.get() or regions.SIMPLE
         self.selectedDirections = [word for word, var in self.directionVars.items()
                                    if var.get()]
+        self.runWeb             = bool(self.alsoWebVar.get())
+        self.selectedLocations  = [h for h in self._city_hoods
+                                   if self._city_vars.get(h) and self._city_vars[h].get()]
+        self.cityName           = self._loaded_city
 
-        if self.selectedDirections:
+        if self.selectedLocations:
+            self.__log(f"City mode: {self.cityName} — {len(self.selectedLocations)} "
+                       f"neighborhoods → {len(self.selectedLocations)} files "
+                       f"(overrides Region Scope + Directions).")
+        elif self.selectedDirections:
             self.__log(f"Direction mode: {len(self.selectedDirections)} directions "
                        f"→ {len(self.selectedDirections)} separate files. "
                        f"(Region Scope is ignored.)")
@@ -741,7 +783,10 @@ class Frontend:
         backend = Backend(self.searchQuery, self.outputFormatValue,
                           healdessmode=self.headlessMode,
                           region_scope=self.regionScope,
-                          directions=self.selectedDirections)
+                          directions=self.selectedDirections,
+                          run_web=self.runWeb,
+                          locations=self.selectedLocations,
+                          city_name=self.cityName)
         backend.mainscraping()
 
     def end_processing(self):
@@ -792,6 +837,226 @@ class Frontend:
         value = self.selectAllVar.get()
         for var in self.directionVars.values():
             var.set(value)
+
+    # ── City → Neighborhoods (OSM) ──────────────────────────────────────────────
+    def _build_city_section(self, card):
+        C = self.C
+        tk.Frame(card, bg=C["card"], height=6).pack()
+        self._section_label(
+            card, "1)  🏙️  City → Neighborhoods  (OSM — top priority)",
+            "Type/search a country + city, click Load, then tick the neighborhoods "
+            "you want. Each becomes its own file, all merged into MAIN. If you tick "
+            "any here, it overrides Direction & Region below.")
+
+        rowf = tk.Frame(card, bg=C["card"])
+        rowf.pack(fill="x", padx=20)
+
+        # Searchable Country box (type to filter)
+        self._all_countries = regions.get_countries()
+        self.cityCountryButton = ttk.Combobox(
+            rowf, values=self._all_countries, textvariable=self.cityCountryVar,
+            width=20, font=("Segoe UI", 10), style="G.TCombobox")
+        self.cityCountryButton.pack(side="left")
+        self.cityCountryButton.bind("<KeyRelease>", self._filter_country)
+        self.cityCountryButton.bind("<<ComboboxSelected>>",
+                                    lambda e: self._on_country_pick())
+
+        # Searchable City box (type to filter)
+        self.cityButton = ttk.Combobox(
+            rowf, textvariable=self.cityVar, width=20, font=("Segoe UI", 10),
+            style="G.TCombobox")
+        self.cityButton.pack(side="left", padx=(8, 8))
+        self.cityButton.bind("<KeyRelease>", self._filter_city)
+
+        load = tk.Label(rowf, text="🔍  Load", font=("Segoe UI", 9, "bold"),
+                        fg="white", bg=C["btn"], padx=12, pady=5, cursor="hand2")
+        load.pack(side="left")
+        load.bind("<Button-1>", lambda e: self._load_locations())
+
+        self._city_done_lbl = tk.Label(
+            card, text=self._city_done_text, font=("Segoe UI", 9, "bold"),
+            fg=C["success"], bg=C["card"], anchor="w")
+        self._city_done_lbl.pack(fill="x", padx=20, pady=(6, 0))
+
+        # Populate the city dropdown for the remembered country
+        if self.cityCountryVar.get():
+            self._on_country_pick()
+
+        # Search bar to filter the neighborhood checkboxes
+        self._loc_search_row = tk.Frame(card, bg=C["card"])
+        tk.Label(self._loc_search_row, text="Search locations:",
+                 font=("Segoe UI", 9), fg=C["dim"], bg=C["card"]).pack(side="left")
+        loc_search = tk.Entry(self._loc_search_row, textvariable=self.locSearchVar,
+                              font=("Segoe UI", 10), bg=C["input"], fg=C["text"],
+                              insertbackground=C["accent"], relief="flat", width=24)
+        loc_search.pack(side="left", padx=(8, 0), ipady=3)
+        loc_search.bind("<KeyRelease>", lambda e: self._render_locations())
+
+        self._loc_select_all = tk.Checkbutton(
+            card, text="Select All Neighborhoods", variable=self.selectAllLocVar,
+            command=self._toggle_all_locations, font=("Segoe UI", 9, "bold"),
+            fg=C["accent"], bg=C["card"], activebackground=C["card"],
+            activeforeground=C["accent"], selectcolor=C["border"], relief="flat",
+            highlightthickness=0, anchor="w")
+
+        self._loc_list = tk.Frame(card, bg=C["card"])
+        self._loc_list.pack(fill="x", padx=20, pady=(2, 0))
+        self._render_locations()
+
+    @staticmethod
+    def _post_combo(combo):
+        """Open (drop down) a combobox's list without needing the arrow click."""
+        try:
+            combo.tk.call("ttk::combobox::Post", combo)
+        except Exception:
+            pass
+
+    def _filter_country(self, event=None):
+        # Don't hijack navigation keys
+        if event and event.keysym in ("Up", "Down", "Return", "Tab", "Escape"):
+            return
+        typed = self.cityCountryVar.get().lower()
+        matches = [c for c in self._all_countries if typed in c.lower()]
+        self.cityCountryButton["values"] = matches or self._all_countries
+        if typed:
+            self._post_combo(self.cityCountryButton)   # auto-show the list
+        if self.cityCountryVar.get() in self._all_countries:
+            self._on_country_pick()
+
+    def _filter_city(self, event=None):
+        if event and event.keysym in ("Up", "Down", "Return", "Tab", "Escape"):
+            return
+        typed = self.cityVar.get().lower()
+        allc = regions.get_cities(self.cityCountryVar.get())
+        self.cityButton["values"] = [c for c in allc if typed in c.lower()] or allc
+        if typed:
+            self._post_combo(self.cityButton)          # auto-show the list
+
+    def _on_country_pick(self):
+        try:
+            self.cityButton["values"] = regions.get_cities(self.cityCountryVar.get())
+        except Exception:
+            self.cityButton["values"] = []
+
+    def _load_locations(self):
+        city = self.cityVar.get().strip()
+        country = self.cityCountryVar.get().strip()
+        if not city:
+            self.__log("Pick or type a city first, then click Load Locations.")
+            return
+        self.__log(f"Fetching neighborhoods of {city} from OpenStreetMap...")
+        threading.Thread(target=self._load_locations_worker,
+                         args=(city, country), daemon=True).start()
+
+    def _load_locations_worker(self, city, country):
+        try:
+            from scraper import osm
+            hoods = osm.get_neighborhoods(city, country)
+        except Exception:
+            hoods = []
+        self.root.after(0, self._on_locations_loaded, city, hoods)
+
+    def _on_locations_loaded(self, city, hoods):
+        self._loaded_city = city
+        self._city_hoods = hoods
+        self._city_vars = {h: tk.IntVar(value=1) for h in hoods}
+        self._city_status = {h: "queued" for h in hoods}
+        self._city_done_text = ""
+        if hasattr(self, "_city_done_lbl"):
+            self._city_done_lbl.config(text="")
+        self._render_locations()
+        if hoods:
+            self.__log(f"Loaded {len(hoods)} neighborhoods for {city}. Tick the ones "
+                       f"you want, then press Start Scraping. (City mode overrides "
+                       f"Region Scope + Directions.)")
+        else:
+            self.__log(f"OpenStreetMap found no neighborhoods for '{city}'. "
+                       f"Check the spelling/country, or just search the whole city.")
+
+    def _render_locations(self):
+        if not hasattr(self, "_loc_list"):
+            return
+        for w in self._loc_list.winfo_children():
+            w.destroy()
+        self._loc_rows = {}
+        C = self.C
+
+        if not self._city_hoods:
+            self._loc_search_row.pack_forget()
+            self._loc_select_all.pack_forget()
+            return
+
+        # Show the search bar + Select All only when we have locations
+        self._loc_search_row.pack(anchor="w", padx=20, pady=(8, 2),
+                                  before=self._loc_list)
+        self._loc_select_all.pack(anchor="w", padx=20, pady=(2, 2),
+                                  before=self._loc_list)
+
+        query = self.locSearchVar.get().strip().lower()
+        visible = [h for h in self._city_hoods if query in h.lower()]
+
+        tk.Label(self._loc_list,
+                 text=f"{len(visible)} of {len(self._city_hoods)} neighborhoods "
+                      f"(checked ones will be scraped):",
+                 font=("Segoe UI", 8), fg=C["dim"], bg=C["card"],
+                 anchor="w").pack(fill="x")
+
+        # Grid of columns to use the full width (not one item per row)
+        gridf = tk.Frame(self._loc_list, bg=C["card"])
+        gridf.pack(fill="x")
+        cols = 3
+        for c in range(cols):
+            gridf.columnconfigure(c, weight=1, uniform="loc")
+
+        for i, h in enumerate(visible):
+            var = self._city_vars.get(h)
+            if var is None:
+                var = tk.IntVar(value=1)
+                self._city_vars[h] = var
+            cell = tk.Frame(gridf, bg=C["card"])
+            r, c = divmod(i, cols)
+            cell.grid(row=r, column=c, sticky="w", padx=(0, 14), pady=1)
+            tk.Checkbutton(cell, text=h, variable=var, font=("Segoe UI", 9),
+                           fg=C["text"], bg=C["card"], activebackground=C["card"],
+                           activeforeground=C["accent"], selectcolor=C["border"],
+                           relief="flat", highlightthickness=0,
+                           anchor="w").pack(side="left")
+            status = self._city_status.get(h, "queued")
+            st = tk.Label(cell, text=status, font=("Segoe UI", 8), fg=C["dim"],
+                          bg=C["card"])
+            st.pack(side="left", padx=(4, 0))
+            self._loc_rows[h] = st
+
+    def _toggle_all_locations(self):
+        value = self.selectAllLocVar.get()
+        for var in self._city_vars.values():
+            var.set(value)
+
+    # Called from the backend (worker thread) to tick rows done
+    def mark_location_status(self, name, status):
+        self.root.after(0, self._set_loc_status, name, status)
+
+    def _set_loc_status(self, name, status):
+        self._city_status[name] = status
+        lbl = self._loc_rows.get(name)
+        if lbl:
+            if status.startswith("✓"):
+                color = self.C["success"]
+            elif "scraping" in status:
+                color = self.C["accent"]
+            elif status.startswith("✗"):
+                color = self.C["warning"] if "warning" in self.C else self.C["dim"]
+            else:
+                color = self.C["dim"]
+            lbl.config(text=status, fg=color)
+
+    def mark_city_done(self, name):
+        self.root.after(0, self._set_city_done, name)
+
+    def _set_city_done(self, name):
+        self._city_done_text = f"✓  {name} — all neighborhoods done"
+        if hasattr(self, "_city_done_lbl"):
+            self._city_done_lbl.config(text=self._city_done_text, fg=self.C["success"])
 
     # ── Logs viewer ─────────────────────────────────────────────────────────────
     def _open_logs_window(self):
@@ -849,6 +1114,16 @@ class Frontend:
         ob.bind("<Button-1>", lambda e: open_file())
 
         refresh()
+
+    # ── Fullscreen ──────────────────────────────────────────────────────────────
+    def _toggle_fullscreen(self):
+        self._is_fullscreen = not self._is_fullscreen
+        self.root.attributes("-fullscreen", self._is_fullscreen)
+
+    def _exit_fullscreen(self):
+        if self._is_fullscreen:
+            self._is_fullscreen = False
+            self.root.attributes("-fullscreen", False)
 
     # ── Close ─────────────────────────────────────────────────────────────────
     def closingbrowser(self):

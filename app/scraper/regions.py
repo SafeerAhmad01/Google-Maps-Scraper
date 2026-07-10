@@ -44,6 +44,11 @@ def get_countries():
     return sorted(_load().keys())
 
 
+def get_cities(country):
+    """Sorted list of cities for a country (empty if unknown)."""
+    return _load().get(country, [])
+
+
 def scope_choices():
     """Values for the GUI dropdown: simple, all, then every country."""
     return [SIMPLE, ALL] + get_countries()

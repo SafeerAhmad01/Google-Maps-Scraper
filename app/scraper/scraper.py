@@ -5,12 +5,14 @@ that will handle scraping process
 
 import os
 import re
+import threading
 from time import sleep
 from scraper.base import Base
 from scraper.scroller import Scroller
 from scraper.parser import Parser
 from scraper.datasaver import DataSaver
-from scraper import regions, history
+from scraper.web_scraper import WebSearchBackend
+from scraper import regions, history, leadfiles
 from scraper.common import Common
 import undetected_chromedriver as uc
 from settings import DRIVER_EXECUTABLE_PATH
@@ -62,7 +64,7 @@ class Backend(Base):
 
 
     def __init__(self, searchquery, outputformat,  healdessmode, region_scope=None,
-                 directions=None):
+                 directions=None, run_web=False, locations=None, city_name=None):
         """
         params:
 
@@ -84,6 +86,15 @@ class Backend(Base):
         self.base_query = searchquery   # kept intact; searchquery may change per direction
         self.region_scope = region_scope
         self.directions = directions or []
+        self.outputformat = outputformat
+        self.run_web = run_web
+        self.locations = locations or []     # neighborhood names for a city
+        self.city_name = city_name or ""
+
+        # All files for this search live in their own folder. In city mode the
+        # folder is named "<query> <city>" so each city gets its own folder.
+        folder_key = f"{searchquery} {city_name}".strip() if self.locations else searchquery
+        self.run_dir = leadfiles.run_folder(folder_key)
 
         # Region-scope searches (only used when no directions are selected).
         self.search_tasks = ([] if self.directions
@@ -210,9 +221,45 @@ class Backend(Base):
         if links:
             parser.parse_links(links)
 
+    def _run_web_for(self, query):
+        """Run the (browser-free) Web Search for a query into this run's folder.
+        Safe to run in a thread alongside the Maps browser scrape."""
+        try:
+            WebSearchBackend(
+                query=query.lower(), output_format=self.outputformat,
+                max_results=999999, on_done=lambda: None,
+                output_dir=self.run_dir).run()
+        except Exception as e:
+            Communicator.show_message(
+                f"Web search error for '{query}': {str(e)[:120]}")
+
+    def _compile_main(self):
+        """Merge every file in this search's folder into one clean MAIN leads file."""
+        try:
+            Communicator.show_message(
+                "Compiling all files into one clean MAIN leads file...")
+            result = leadfiles.compile_folder(
+                self.run_dir, self.outputformat, self.base_query)
+            if result:
+                path, n = result
+                Communicator.show_message(
+                    f"★ MAIN file ready: {os.path.basename(path)}  —  {n} clean "
+                    f"leads (email/phone only).")
+                history.add_entry(
+                    query=self.base_query, source="MAIN compile",
+                    scope="All files merged", records=n,
+                    output_file=path, status="Success")
+            else:
+                Communicator.show_message(
+                    "No leads with an email/phone found to compile into MAIN.")
+        except Exception as e:
+            Communicator.show_message(f"Could not compile MAIN file: {e}")
+
     def mainscraping(self):
         try:
-            if self.directions:
+            if self.locations:
+                self._run_locations_mode()
+            elif self.directions:
                 self._run_direction_mode()
             else:
                 self._run_scope_mode()
@@ -231,14 +278,23 @@ class Backend(Base):
             except:  # if browser is always closed due to error
                 pass
 
+            self._compile_main()
             Communicator.end_processing()
-            Communicator.show_message("Now you can start another session")
+            Communicator.show_message(
+                f"All done. Files are in: {self.run_dir}")
 
     def _run_scope_mode(self):
         """None / country / All-countries: merge everything into a single file."""
         output_file = None
         record_count = 0
         status = "Success"
+
+        web_thread = None
+        if self.run_web:
+            Communicator.show_message("Also running Web Search in parallel...")
+            web_thread = threading.Thread(
+                target=self._run_web_for, args=(self.base_query,), daemon=True)
+            web_thread.start()
 
         try:
             parser = Parser(self.driver)  # one parser accumulates all results
@@ -263,7 +319,7 @@ class Backend(Base):
             record_count = len(data)
             Communicator.show_message(
                 f"Creating 1 file with {record_count} merged records...")
-            output_file = DataSaver().save(datalist=data)
+            output_file = DataSaver().save(datalist=data, output_dir=self.run_dir)
             if output_file:
                 Communicator.show_message(
                     f"✔ File created: {os.path.basename(output_file)}")
@@ -274,6 +330,10 @@ class Backend(Base):
         except Exception as e:
             status = "Error"
             Communicator.show_message(f"Error occurred while scraping. Error: {str(e)}")
+
+        if web_thread:
+            Communicator.show_message("Waiting for Web Search to finish...")
+            web_thread.join()
 
         history.add_entry(
             query=self.searchquery,
@@ -311,6 +371,14 @@ class Backend(Base):
             Communicator.show_message(
                 f"[File {index}/{total}]  Now creating:  {direction_query} - GMS output")
 
+            # Kick off the (browser-free) Web Search for this direction in
+            # parallel with the Maps browser scrape.
+            web_thread = None
+            if self.run_web and not Common.close_thread_is_set():
+                web_thread = threading.Thread(
+                    target=self._run_web_for, args=(direction_query,), daemon=True)
+                web_thread.start()
+
             output_file = None
             record_count = 0
             status = "Success"
@@ -321,7 +389,7 @@ class Backend(Base):
 
                 data = self._dedupe(parser.finalData)
                 record_count = len(data)
-                output_file = DataSaver().save(datalist=data)
+                output_file = DataSaver().save(datalist=data, output_dir=self.run_dir)
                 if output_file:
                     Communicator.show_message(
                         f"✔ File {index}/{total} created: {os.path.basename(output_file)}")
@@ -332,6 +400,9 @@ class Backend(Base):
                 status = "Error"
                 Communicator.show_message(
                     f"Error while scraping direction '{word}': {str(e)}")
+
+            if web_thread:
+                web_thread.join()
 
             Communicator.set_progress(index, total,
                                       f"Finished {index}/{total} files")
@@ -344,6 +415,69 @@ class Backend(Base):
                 output_file=output_file,
                 status=status,
             )
+
+    def _run_locations_mode(self):
+        """Search each neighborhood of a city; one file each, ticked as done."""
+        total = len(self.locations)
+        Communicator.show_message(
+            f"City mode: {self.city_name} — {total} neighborhoods, one file each.")
+        Communicator.set_progress(0, total,
+                                  f"{self.city_name}: 0/{total} neighborhoods")
+
+        for index, hood in enumerate(self.locations, start=1):
+            if Common.close_thread_is_set():
+                break
+
+            if index > 1:
+                self._restart_driver()
+                sleep(2)
+
+            loc_query = f"{self.base_query} in {hood}, {self.city_name}".strip()
+            self.searchquery = loc_query  # drives file name + history
+
+            Communicator.mark_location_status(hood, "scraping...")
+            Communicator.set_progress(
+                index - 1, total, f"{self.city_name}: {hood} ({index}/{total})")
+            Communicator.show_message(
+                f"[{index}/{total}]  {hood}  →  {loc_query}")
+
+            web_thread = None
+            if self.run_web and not Common.close_thread_is_set():
+                web_thread = threading.Thread(
+                    target=self._run_web_for, args=(loc_query,), daemon=True)
+                web_thread.start()
+
+            output_file = None
+            record_count = 0
+            status = "Success"
+
+            try:
+                parser = Parser(self.driver)
+                self._scrape_query(loc_query, parser)
+                data = self._dedupe(parser.finalData)
+                record_count = len(data)
+                output_file = DataSaver().save(datalist=data, output_dir=self.run_dir)
+                if not output_file:
+                    status = "No data"
+            except Exception as e:
+                status = "Error"
+                Communicator.show_message(
+                    f"Error scraping '{hood}': {str(e)[:120]}")
+
+            if web_thread:
+                web_thread.join()
+
+            Communicator.mark_location_status(
+                hood, f"✓ done ({record_count})" if status == "Success" else f"✗ {status}")
+            Communicator.set_progress(index, total,
+                                      f"{self.city_name}: {index}/{total} done")
+
+            history.add_entry(
+                query=loc_query, source="Google Maps",
+                scope=f"{self.city_name} / {hood}",
+                records=record_count, output_file=output_file, status=status)
+
+        Communicator.mark_city_done(self.city_name)
 
 
 
