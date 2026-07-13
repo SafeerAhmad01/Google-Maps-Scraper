@@ -24,7 +24,11 @@
       "Bash(awk 'NR>=87023 && NR<=89946' dist/logs/leadscrapper.log)",
       "Bash(\"./venv/Scripts/python.exe\" -m py_compile app/scraper/frontend.py app/scraper/scraper.py app/scraper/common.py app/scraper/jobstate.py app/scraper/web_scraper.py)",
       "Bash(\"./venv/Scripts/python.exe\" -m py_compile app/scraper/frontend.py app/scraper/scraper.py app/scraper/common.py app/scraper/jobstate.py app/scraper/web_scraper.py app/scraper/leadfiles.py)",
-      "Bash(timeout 8 ../venv/Scripts/python.exe -c ' *)"
+      "Bash(timeout 8 ../venv/Scripts/python.exe -c ' *)",
+      "Bash(timeout 30 ../venv/Scripts/python.exe -c ' *)",
+      "Bash(\"./venv/Scripts/python.exe\" -m py_compile app/scraper/web_scraper.py)",
+      "Bash(timeout 40 ../venv/Scripts/python.exe -c ' *)",
+      "Bash(timeout 20 ../venv/Scripts/python.exe -c ' *)"
     ],
     "deny": [],
     "ask": []

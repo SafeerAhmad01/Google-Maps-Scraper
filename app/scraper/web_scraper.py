@@ -6,7 +6,7 @@ import pandas as pd
 import urllib3
 import warnings
 from bs4 import BeautifulSoup
-from urllib.parse import urlparse, quote
+from urllib.parse import urlparse, urljoin
 from scraper.communicator import Communicator
 from scraper.common import Common
 from scraper import history
@@ -100,10 +100,6 @@ class WebSearchBackend:
         except Exception as e:
             Communicator.show_message(f"Google unavailable ({e}), using DuckDuckGo only...")
 
-        # --- Bing (HTML results page, no API key needed) ---
-        if not full(urls):
-            self._search_bing(add, full)
-
         # --- DuckDuckGo (multiple passes) ---
         variations = [
             self.query,
@@ -160,33 +156,6 @@ class WebSearchBackend:
             urls = urls[:cap]
         Communicator.show_message(f"\nFound {len(urls)} unique websites. Scraping all of them...\n")
         return urls
-
-    def _search_bing(self, add, full):
-        """Scrape Bing's plain HTML results page — no API key required."""
-        try:
-            Communicator.show_message("Searching Bing...")
-            headers = dict(SESS.headers)
-            found = 0
-            for page in range(3):  # ~10 results per page, 3 pages = up to ~30
-                if Common.close_thread_is_set() or full(None):
-                    break
-                first = page * 10 + 1
-                url = f"https://www.bing.com/search?q={quote(self.query)}&first={first}"
-                try:
-                    resp = requests.get(url, headers=headers, timeout=10, verify=False)
-                    soup = BeautifulSoup(resp.text, "html.parser")
-                except Exception:
-                    break
-                links = [a.get("href") for a in soup.select("li.b_algo h2 a") if a.get("href")]
-                if not links:
-                    break
-                for href in links:
-                    add(href)
-                    found += 1
-                time.sleep(1.2)
-            Communicator.show_message(f"Bing: {found} results checked")
-        except Exception as e:
-            Communicator.show_message(f"Bing unavailable ({e})")
 
     # ── Extractors ────────────────────────────────────────────────────────────
     # Elements whose text/attribute content is markup, not something a visitor
@@ -314,31 +283,99 @@ class WebSearchBackend:
             parts.append(roles[0].title())
         return ' — '.join(parts) if parts else None
 
+    # Guessed paths tried only if no promising link was found in the nav/footer.
+    _FALLBACK_PATHS = (
+        '/contact', '/contact/', '/contact-us', '/contact-us/', '/contactus',
+        '/contact-us.html', '/contact.html', '/contact.php', '/contactpage',
+        '/get-in-touch', '/get-in-touch/', '/getintouch', '/reach-us',
+        '/talk-to-us', '/connect', '/enquiry', '/enquiries', '/enquire',
+        '/make-an-enquiry', '/request-a-quote', '/quote', '/get-a-quote',
+        '/book-now', '/booking', '/reservations', '/appointment',
+        '/customer-service', '/support', '/help', '/help-centre',
+        '/about', '/about/', '/about-us', '/about-us/', '/aboutus',
+        '/who-we-are', '/our-story', '/company', '/company-info',
+        '/team', '/our-team', '/meet-the-team', '/meet-our-team', '/staff',
+        '/people', '/our-people', '/leadership', '/management',
+        '/branches', '/locations', '/find-us', '/our-locations', '/offices',
+        '/franchise', '/agents', '/our-agents',
+    )
+    # Link text/href hints that mark a page as worth checking for contact info.
+    _CONTACT_HINTS = (
+        'contact', 'about', 'team', 'staff', 'people', 'leadership',
+        'management', 'enquir', 'inquir', 'get-in-touch', 'getintouch',
+        'reach-us', 'reach us', 'talk-to-us', 'connect', 'support', 'help',
+        'reservations', 'booking', 'book now', 'appointment', 'quote',
+        'branch', 'location', 'find us', 'find-us', 'office', 'who we are',
+        'our story', 'meet the team', 'meet our team', 'company', 'franchise',
+        'agents', 'customer service', 'complaints', 'feedback',
+    )
+
+    def _candidate_pages(self, base_url, soup):
+        """Same-site links whose href/text look like a contact/about/team page
+        — checked before falling back to guessed paths, since a real link the
+        site itself points to is far more likely to be right."""
+        domain = urlparse(base_url).netloc.lower()
+        seen, out = set(), []
+        for a in soup.find_all('a', href=True):
+            href = a['href']
+            if href.startswith(('mailto:', 'tel:', 'javascript:', '#')):
+                continue
+            try:
+                full = urljoin(base_url, href).split('#')[0].rstrip('/')
+                if urlparse(full).netloc.lower() != domain:
+                    continue
+            except Exception:
+                continue
+            if not full or full == base_url.rstrip('/') or full in seen:
+                continue
+            hay = (href + ' ' + a.get_text(strip=True)).lower()
+            if any(h in hay for h in self._CONTACT_HINTS):
+                seen.add(full)
+                out.append(full)
+        return out[:5]
+
     # ── Scrape one website ────────────────────────────────────────────────────
     def _scrape(self, url):
         try:
             resp = SESS.get(url, timeout=12, verify=False)
             soup = BeautifulSoup(resp.text, 'html.parser')
-            text = resp.text
 
             name  = self._get_name(soup)
             desc  = self._get_description(soup)
             depts = self._get_departments(soup)
             staff = self._get_staff(url, soup)
+            more_pages = self._candidate_pages(url, soup)
 
+            text   = self._visible_text(soup)
             emails = self._get_emails(text)
-            if not emails:
-                for path in ['/contact', '/contact-us', '/get-in-touch', '/contact/']:
-                    try:
-                        r2 = SESS.get(url.rstrip('/') + path, timeout=8, verify=False)
-                        emails = self._get_emails(r2.text)
-                        if emails:
-                            text = r2.text
-                            break
-                    except Exception:
-                        continue
+
+            # Keep looking — real links found on the page first, then guessed
+            # common paths — until an email turns up. Capped so one dead site
+            # (no contact info anywhere) can't stall the whole batch.
+            MAX_EXTRA_PAGES = 10
+            tried = {url.rstrip('/')}
+            candidates = (list(more_pages)
+                         + [url.rstrip('/') + p for p in self._FALLBACK_PATHS])
+            checked = 0
+            for page in candidates:
+                if emails or checked >= MAX_EXTRA_PAGES or page in tried:
+                    continue
+                checked += 1
+                tried.add(page)
+                try:
+                    r2 = SESS.get(page, timeout=8, verify=False)
+                    s2 = BeautifulSoup(r2.text, 'html.parser')
+                    t2 = self._visible_text(s2)
+                    found = self._get_emails(t2)
+                    if found:
+                        emails, text = found, t2
+                except Exception:
+                    continue
 
             phones = self._get_phones(text)
+
+            if not name or (not emails and not phones):
+                return None
 
             return {
                 'Business Name':    name,
