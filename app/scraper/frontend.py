@@ -3,17 +3,20 @@ This module contain the code for frontend (themed, rounded UI).
 """
 
 from scraper.communicator import Communicator
+import os
 import tkinter as tk
 from tkinter import ttk, WORD
 from scraper.scraper import Backend
 from scraper.web_scraper import WebSearchBackend
 from scraper.common import Common
-from scraper import regions, history, geodata
+from scraper import regions, history, geodata, leadfiles, jobstate
 from scraper.resource import resource_path
 from scraper import applog
+from settings import OUTPUT_PATH
 import threading
 import time
 import logging
+from tkinter import filedialog
 
 
 # ── Themes ─────────────────────────────────────────────────────────────────────
@@ -148,6 +151,9 @@ class Frontend:
         self._maps_busy = False
         self._web_busy = False
         self._status_on = False
+        self._resume_completed = set()   # hoods already done, when resuming a job
+        self._active_backend = None      # current Maps Backend (for "Compile Now")
+        self._active_web_run = None      # current Web Search run_dir/fmt/query
         self._prog = None          # (current, total, message) — survives theme rebuild
         self._progress_start = None
 
@@ -167,10 +173,18 @@ class Frontend:
         self._city_hoods = []          # city names currently loaded
         self._city_vars = {}           # name -> IntVar (persist)
         self._city_status = {}         # name -> status text
-        self._loc_rows = {}            # name -> status Label (rebuilt each build)
         self._city_done_text = ""
+        # The picker is built once per tab that shows it (Maps + Web Search), so
+        # each of these is a LIST with one entry per tab, kept in sync because
+        # they all read/write the same _city_hoods/_city_vars/_city_status above.
+        self._loc_rows = {}             # city -> list of status Labels (one per tab)
+        self._loc_list_frames = []      # checklist container frame per tab
+        self._loc_search_rows = []      # "search cities" row per tab
+        self._loc_select_alls = []      # "Select All" checkbutton per tab
+        self._city_done_lbls = []       # "city done" label per tab
         self.webQueryVar = tk.StringVar()
         self.webFormatVar = tk.StringVar()
+        self.webMaxVar = tk.StringVar(value="50")
 
         self._direction_defs = regions.load_directions()
         self.directionVars = {word: tk.IntVar()
@@ -347,6 +361,13 @@ class Frontend:
         self._content = tk.Frame(self._scroll_inner, bg=self.C["bg"])
         self._content.pack(fill="x")
 
+        # Reset per-tab picker widget lists (theme rebuilds destroy the old
+        # widgets, so stale references must not linger here).
+        self._loc_list_frames = []
+        self._loc_search_rows = []
+        self._loc_select_alls = []
+        self._city_done_lbls = []
+
         self._frames = {
             "maps":    tk.Frame(self._content, bg=self.C["bg"]),
             "web":     tk.Frame(self._content, bg=self.C["bg"]),
@@ -410,6 +431,13 @@ class Frontend:
         self.maps_btn = self._btn(card, "▶   Start Scraping", self._maps_submit)
         if self._maps_busy:
             self.maps_btn.set_state(False, "⏳  Scraping in progress...")
+        self.pause_btn = self._btn(
+            card, "▶  Resume" if Common.is_paused() else "⏸  Pause",
+            self._toggle_pause)
+        self.pause_btn.set_state(self._maps_busy)
+        self.maps_compile_btn = self._btn(
+            card, "⚙  Compile MAIN Now (from progress so far)", self._compile_now)
+        self.maps_compile_btn.set_state(self._active_backend is not None)
         tk.Frame(card, bg=C["card"], height=6).pack()
 
     # ── Web Search card ──────────────────────────────────────────────────────
@@ -435,14 +463,29 @@ class Frontend:
 
         right = tk.Frame(row, bg=C["card"])
         right.pack(side="right")
-        self._section_label(right, "Results", "No limit — scrapes everything")
-        tk.Label(right, text="∞  Unlimited", font=("Segoe UI", 13, "bold"),
-                 fg=C["accent"], bg=C["card"]).pack(anchor="w", pady=(4, 0))
+        self._section_label(right, "Max Sites",
+                            "Per search/city. Lower = faster batches.")
+        web_max = ttk.Combobox(
+            right, values=["20", "50", "100", "200", "Unlimited"],
+            textvariable=self.webMaxVar, state="readonly",
+            width=12, font=("Segoe UI", 11), style="G.TCombobox")
+        web_max.pack(fill="x")
+
+        # Same Country/State/City picker as the Maps tab — ticking a city here
+        # also ticks it there (shared selection), so either tool can use it.
+        self._build_geo_section(card)
 
         tk.Frame(card, bg=C["card"], height=18).pack()
         self.web_btn = self._btn(card, "▶   Start Web Search", self._web_submit)
         if self._web_busy:
             self.web_btn.set_state(False, "⏳  Searching the web...")
+        self.web_pause_btn = self._btn(
+            card, "▶  Resume" if Common.is_paused() else "⏸  Pause",
+            self._toggle_pause)
+        self.web_pause_btn.set_state(self._web_busy)
+        self.web_compile_btn = self._btn(
+            card, "⚙  Compile MAIN Now (from progress so far)", self._compile_now)
+        self.web_compile_btn.set_state(self._active_web_run is not None)
         tk.Frame(card, bg=C["card"], height=6).pack()
 
     # ── History card ───────────────────────────────────────────────────────────
@@ -455,9 +498,18 @@ class Frontend:
         tk.Label(top, text="Search History", font=("Segoe UI", 11, "bold"),
                  fg=C["text"], bg=C["card"]).pack(side="left")
         self._refresh_button(top)
+        cb = tk.Label(top, text="📁  Compile a folder…",
+                     font=("Segoe UI", 9, "bold"), fg=C["accent"],
+                     bg=C["accent_soft"], padx=12, pady=5, cursor="hand2")
+        cb.pack(side="right", padx=(0, 8))
+        cb.bind("<Button-1>", lambda e: self._compile_folder_dialog())
         tk.Label(card, text="Every Google Maps and Web Search run is logged here.",
                  font=("Segoe UI", 9), fg=C["dim"], bg=C["card"],
                  anchor="w").pack(fill="x", padx=20, pady=(2, 8))
+
+        self._resume_banner_frame = tk.Frame(card, bg=C["accent_soft"])
+        self._resume_banner_frame.pack(fill="x", padx=20, pady=(0, 10))
+        self._refresh_resume_banner()
 
         wrap = tk.Frame(card, bg=C["card"])
         wrap.pack(fill="x", padx=20, pady=(0, 16))
@@ -493,6 +545,7 @@ class Frontend:
         b.bind("<Button-1>", lambda e: self._refresh_history())
 
     def _refresh_history(self):
+        self._refresh_resume_banner()
         if not hasattr(self, "history_tree"):
             return
         try:
@@ -505,6 +558,106 @@ class Frontend:
                     e.get("status", "-")))
         except Exception:
             pass
+
+    # ── Resume an interrupted batch (Pause + close app, or a crash) ────────────
+    def _refresh_resume_banner(self):
+        if not hasattr(self, "_resume_banner_frame"):
+            return
+        for w in self._resume_banner_frame.winfo_children():
+            w.destroy()
+        C = self.C
+        job = jobstate.load()
+        if not job or self._maps_busy or self._web_busy:
+            self._resume_banner_frame.pack_forget()
+            return
+        self._resume_banner_frame.pack(fill="x", padx=20, pady=(0, 10))
+
+        done_n = len(job.get("completed", []))
+        total_n = len(job.get("locations", [])) or 1
+        kind = "Google Maps" if job.get("mode", "maps") == "maps" else "Web Search"
+        tk.Label(self._resume_banner_frame,
+                 text=f"⏸  Unfinished {kind} job: \"{job['query']}\" in "
+                      f"{job['city_name']} — {done_n}/{total_n} locations done.",
+                 font=("Segoe UI", 9, "bold"), fg=C["text"], bg=C["accent_soft"],
+                 anchor="w", wraplength=560, justify="left").pack(
+            side="left", padx=12, pady=8, fill="x", expand=True)
+        resume_lbl = tk.Label(self._resume_banner_frame, text="▶  Resume",
+                              font=("Segoe UI", 9, "bold"), fg="white",
+                              bg=C["accent"], padx=12, pady=5, cursor="hand2")
+        resume_lbl.pack(side="right", padx=(8, 12), pady=8)
+        resume_lbl.bind("<Button-1>", lambda e: self._resume_job())
+        discard_lbl = tk.Label(self._resume_banner_frame, text="✕  Discard",
+                               font=("Segoe UI", 9), fg=C["dim"], bg=C["accent_soft"],
+                               padx=6, pady=5, cursor="hand2")
+        discard_lbl.pack(side="right", pady=8)
+        discard_lbl.bind("<Button-1>", lambda e: self._discard_resume_job())
+
+    def _discard_resume_job(self):
+        jobstate.clear()
+        self._refresh_resume_banner()
+
+    def _resume_job(self):
+        if self._maps_busy or self._web_busy:
+            self.__log("A job is already running — let it finish (or Pause it) first.")
+            return
+        job = jobstate.load()
+        if not job:
+            self.__log("Nothing to resume.")
+            return
+
+        Common.resume()
+        completed = set(job.get("completed", []))
+        locations = list(job.get("locations", []))
+
+        # Reflect it in the checklist so the Maps/Web tab shows real progress.
+        self._city_hoods = locations
+        self._city_vars = {h: tk.IntVar(value=1) for h in locations}
+        self._city_status = {h: ("✓ done (resumed)" if h in completed else "queued")
+                             for h in locations}
+        self._geo_region_label = job["city_name"]
+        self._render_locations()
+
+        if job.get("mode", "maps") == "web":
+            self.__log(f"Resuming Web Search: \"{job['query']}\" in "
+                       f"{job['city_name']} — {len(completed)}/{len(locations)} "
+                       f"already done.")
+            self._web_busy = True
+            if hasattr(self, "web_btn"):
+                self.web_btn.set_state(False, "⏳  Searching the web...")
+            if hasattr(self, "web_pause_btn"):
+                self.web_pause_btn.set_state(True, "⏸  Pause")
+            self._status_on = True
+            if hasattr(self, "status_dot"):
+                self.status_dot.config(fg=self.C["success"])
+            self._switch_tab("web")
+            threading.Thread(
+                target=self._run_web_locations,
+                args=(job["query"], job["output_format"], locations,
+                     job["city_name"], job.get("max_results") or 50),
+                kwargs={"resume_completed": completed},
+                daemon=True).start()
+        else:
+            self.__log(f"Resuming: \"{job['query']}\" in {job['city_name']} — "
+                       f"{len(completed)}/{len(locations)} already done.")
+            self.searchQuery       = job["query"]
+            self.outputFormatValue = job["output_format"]
+            self.headlessMode      = job.get("headless") or 0
+            self.runWeb            = bool(job.get("run_web"))
+            self.selectedLocations = locations
+            self.cityName          = job["city_name"]
+            self._resume_completed = completed
+
+            self._maps_busy = True
+            if hasattr(self, "maps_btn"):
+                self.maps_btn.set_state(False, "⏳  Scraping in progress...")
+            if hasattr(self, "pause_btn"):
+                self.pause_btn.set_state(True, "⏸  Pause")
+            self._status_on = True
+            if hasattr(self, "status_dot"):
+                self.status_dot.config(fg=self.C["success"])
+            self._switch_tab("maps")
+            self._maps_thread = threading.Thread(target=self._run_maps, daemon=True)
+            self._maps_thread.start()
 
     # ── Activity log ──────────────────────────────────────────────────────────
     def _build_log(self):
@@ -705,8 +858,13 @@ class Frontend:
             self.__log("Please select an output format.")
             return
 
+        if not self._web_busy:
+            Common.resume()   # clear any stale pause flag from a previous run
+        self._resume_completed = set()
         self._maps_busy = True
         self.maps_btn.set_state(False, "⏳  Scraping in progress...")
+        if hasattr(self, "pause_btn"):
+            self.pause_btn.set_state(True, "⏸  Pause")
         self._status_on = True
         self.status_dot.config(fg=self.C["success"])
 
@@ -735,19 +893,137 @@ class Frontend:
                           directions=[],
                           run_web=self.runWeb,
                           locations=self.selectedLocations,
-                          city_name=self.cityName)
+                          city_name=self.cityName,
+                          resume_completed=self._resume_completed)
+        self._active_backend = backend
+        self._sync_compile_buttons()
         backend.mainscraping()
+
+    # ── Pause / Resume (shared by Maps + Web Search — only one loop is ever
+    #    actually blocked on it at a time) ───────────────────────────────────────
+    def _toggle_pause(self):
+        if not (self._maps_busy or self._web_busy):
+            return
+        if Common.is_paused():
+            Common.resume()
+            self.__log("Resumed.")
+        else:
+            Common.pause()
+            self.__log("Paused — progress so far is saved. Click Resume to "
+                       "continue, or close the app now and pick this job back "
+                       "up later from the History tab.")
+        self._sync_pause_buttons()
+
+    def _sync_pause_buttons(self):
+        text = "▶  Resume" if Common.is_paused() else "⏸  Pause"
+        busy = self._maps_busy or self._web_busy
+        for name in ("pause_btn", "web_pause_btn"):
+            btn = getattr(self, name, None)
+            if btn is not None:
+                btn.set_state(busy, text)
 
     def end_processing(self):
         self._maps_busy = False
         self._status_on = False
+        self._active_backend = None
+        if not self._web_busy:
+            Common.resume()   # don't leave the next run stuck paused
+        self._sync_pause_buttons()
+        self._sync_compile_buttons()
         if hasattr(self, "maps_btn"):
             self.maps_btn.set_state(True, "▶   Start Scraping")
         if hasattr(self, "status_dot"):
             self.status_dot.config(fg=self.C["border"])
         self._refresh_history()
 
+    def _sync_compile_buttons(self):
+        if hasattr(self, "maps_compile_btn"):
+            self.maps_compile_btn.set_state(self._active_backend is not None)
+        if hasattr(self, "web_compile_btn"):
+            self.web_compile_btn.set_state(self._active_web_run is not None)
+
+    def _compile_now(self):
+        """Compile whatever's been scraped so far (for the CURRENTLY running
+        job) into a MAIN leads file, without stopping/pausing the batch —
+        useful mid-way through a big run (e.g. 312/3849 towns done)."""
+        run_dir = fmt = query = None
+        if self._active_backend is not None:
+            b = self._active_backend
+            run_dir, fmt, query = b.run_dir, b.outputformat, b.base_query
+        elif self._active_web_run is not None:
+            r = self._active_web_run
+            run_dir, fmt, query = r["run_dir"], r["fmt"], r["query"]
+        else:
+            self.__log("No job is running right now — use \"📁 Compile a "
+                       "folder…\" in the History tab to compile an older one.")
+            return
+
+        self.__log(f"Compiling progress so far ({os.path.basename(run_dir)}) "
+                   f"into a MAIN leads file...")
+
+        def work():
+            try:
+                result = leadfiles.compile_folder(run_dir, fmt, query)
+                if result:
+                    path, n = result
+                    self.__log(f"★ MAIN file updated: {os.path.basename(path)} "
+                               f"— {n} clean leads so far.")
+                    history.add_entry(
+                        query=query, source="MAIN compile (manual)",
+                        scope="Compiled mid-run", records=n,
+                        output_file=path, status="Success")
+                else:
+                    self.__log("No leads with an email/phone found yet to compile.")
+            except Exception as e:
+                self.__log(f"Could not compile: {e}")
+            self.root.after(0, self._refresh_history)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _compile_folder_dialog(self):
+        """Pick ANY search's output folder and compile it into a MAIN leads
+        file — for a batch that finished (or was closed) before it got the
+        chance to auto-compile, or just to re-compile after adding files."""
+        folder = filedialog.askdirectory(
+            initialdir=OUTPUT_PATH if os.path.exists(OUTPUT_PATH) else ".",
+            title="Pick a search's output folder to compile")
+        if not folder:
+            return
+        fmt = (getattr(self, "outputFormatVar", None) and
+              self.outputFormatVar.get() or "excel").lower()
+        query = os.path.basename(folder.rstrip("/\\")) or "leads"
+
+        self.__log(f"Compiling \"{query}\" → MAIN leads file...")
+
+        def work():
+            try:
+                result = leadfiles.compile_folder(folder, fmt, query)
+                if result:
+                    path, n = result
+                    self.__log(f"★ MAIN file ready: {os.path.basename(path)} "
+                               f"— {n} clean leads.")
+                    history.add_entry(
+                        query=query, source="MAIN compile (manual)",
+                        scope="Compiled from History tab", records=n,
+                        output_file=path, status="Success")
+                else:
+                    self.__log(f"No leads with an email/phone found in \"{query}\".")
+            except Exception as e:
+                self.__log(f"Could not compile: {e}")
+            self.root.after(0, self._refresh_history)
+
+        threading.Thread(target=work, daemon=True).start()
+
     # ── Web logic ─────────────────────────────────────────────────────────────
+    def _parse_web_max(self):
+        raw = self.webMaxVar.get().strip()
+        if not raw or raw.lower() == "unlimited":
+            return 999999
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            return 50
+
     def _web_submit(self):
         query = self.webQueryVar.get().strip()
         fmt   = self.webFormatVar.get()
@@ -759,22 +1035,129 @@ class Frontend:
             self.__log("Please select an output format.")
             return
 
+        selected_cities = [h for h in self._city_hoods
+                          if self._city_vars.get(h) and self._city_vars[h].get()]
+        region_label = self._geo_region_label
+        max_results = self._parse_web_max()
+
+        if not self._maps_busy:
+            Common.resume()   # clear any stale pause flag from a previous run
         self._web_busy = True
         self.web_btn.set_state(False, "⏳  Searching the web...")
+        if hasattr(self, "web_pause_btn"):
+            self.web_pause_btn.set_state(True, "⏸  Pause")
         self._status_on = True
         self.status_dot.config(fg=self.C["success"])
 
-        def run():
-            WebSearchBackend(
-                query=query.lower(), output_format=fmt.lower(),
-                max_results=999999, on_done=self._end_web,
-            ).run()
+        if selected_cities:
+            self.__log(f"Location mode: {len(selected_cities)} cities in "
+                       f"{region_label} → {len(selected_cities)} web-search files, "
+                       f"all merged into MAIN. (Max {max_results} sites/city, "
+                       f"duplicate domains skipped across cities.)")
+            threading.Thread(
+                target=self._run_web_locations,
+                args=(query, fmt, selected_cities, region_label, max_results),
+                kwargs={"resume_completed": set()},
+                daemon=True).start()
+        else:
+            def run():
+                WebSearchBackend(
+                    query=query.lower(), output_format=fmt.lower(),
+                    max_results=max_results, on_done=self._end_web,
+                ).run()
 
-        threading.Thread(target=run, daemon=True).start()
+            threading.Thread(target=run, daemon=True).start()
+
+    def _run_web_locations(self, query, fmt, cities, region_label, max_results,
+                           resume_completed=None):
+        """Run one Web Search per selected city, tick each done, then compile
+        a clean MAIN leads file for the whole batch (mirrors Maps city mode).
+
+        A shared `global_seen_domains` set is passed to every city's search so
+        a business already scraped for one city (e.g. a chain) isn't re-scraped
+        for the next — saves time across a big batch."""
+        run_dir = leadfiles.run_folder(f"{query} {region_label}".strip())
+        total = len(cities)
+        resume_completed = set(resume_completed or [])
+        completed = list(resume_completed)
+        global_seen_domains = set()
+        self._active_web_run = {"run_dir": run_dir, "fmt": fmt.lower(), "query": query}
+        self.root.after(0, self._sync_compile_buttons)
+        self.update_progress(len(completed), total,
+                             f"{region_label}: {len(completed)}/{total} cities")
+
+        for index, city in enumerate(cities, start=1):
+            if Common.close_thread_is_set():
+                break
+            Common.wait_if_paused()
+            if Common.close_thread_is_set():
+                break
+
+            if city in resume_completed:
+                self.mark_location_status(city, "✓ done (resumed)")
+                self.update_progress(index, total, f"{region_label}: {index}/{total} done")
+                continue
+
+            first_part = region_label.split(",")[0].strip().lower()
+            if city.strip().lower() == first_part:
+                city_query = f"{query} in {region_label}".strip()
+            else:
+                city_query = f"{query} in {city}, {region_label}".strip()
+
+            self.mark_location_status(city, "searching...")
+            self.update_progress(index - 1, total,
+                                 f"Web search {index}/{total}: {city}")
+            self.__log(f"[{index}/{total}]  {city}  →  {city_query}")
+
+            # WebSearchBackend.run() is synchronous — it saves and returns.
+            backend = WebSearchBackend(
+                query=city_query.lower(), output_format=fmt.lower(),
+                max_results=max_results, on_done=lambda: None, output_dir=run_dir,
+                global_seen_domains=global_seen_domains)
+            try:
+                backend.run()
+            except Exception as ex:
+                self.__log(f"Web search error for '{city}': {str(ex)[:120]}")
+
+            record_count = len(backend.results)
+            self.mark_location_status(city, f"✓ done ({record_count})")
+            self.update_progress(index, total, f"{region_label}: {index}/{total} done")
+
+            completed.append(city)
+            jobstate.save(query, region_label, fmt.lower(), None, False,
+                         cities, completed, mode="web", max_results=max_results)
+
+        if len(completed) >= total:
+            jobstate.clear()
+
+        self.mark_city_done(region_label)
+
+        self.__log("Compiling all files into one clean MAIN leads file...")
+        try:
+            result = leadfiles.compile_folder(run_dir, fmt.lower(), query)
+            if result:
+                path, n = result
+                self.__log(f"★ MAIN file ready: {os.path.basename(path)}  —  "
+                           f"{n} clean leads (email/phone only).")
+                history.add_entry(
+                    query=query, source="MAIN compile (Web Search)",
+                    scope=region_label, records=n, output_file=path,
+                    status="Success")
+            else:
+                self.__log("No leads with an email/phone found to compile into MAIN.")
+        except Exception as e:
+            self.__log(f"Could not compile MAIN file: {e}")
+
+        self._end_web()
 
     def _end_web(self):
         self._web_busy = False
         self._status_on = False
+        self._active_web_run = None
+        if not self._maps_busy:
+            Common.resume()   # don't leave the next run stuck paused
+        self._sync_pause_buttons()
+        self._sync_compile_buttons()
         if hasattr(self, "web_btn"):
             self.web_btn.set_state(True, "▶   Start Web Search")
         if hasattr(self, "status_dot"):
@@ -866,6 +1249,10 @@ class Frontend:
         return (["★ All cities in country"] + states) if states else states
 
     def _build_geo_section(self, card):
+        """Builds the Country/State/City picker. Safe to call once per tab that
+        wants it (Maps + Web Search) — all instances share the same underlying
+        selection (self._city_hoods / _city_vars / _city_status), so ticking a
+        city on one tab is reflected on the other too."""
         C = self.C
         self._geo_card = card
         tk.Frame(card, bg=C["card"], height=6).pack()
@@ -884,30 +1271,34 @@ class Frontend:
         self._autocomplete(rowf, self.stateVar, self._state_source,
                            self._on_state_pick, 22).pack(side="left")
 
-        self._city_done_lbl = tk.Label(
+        done_lbl = tk.Label(
             card, text=self._city_done_text, font=("Segoe UI", 9, "bold"),
             fg=C["success"], bg=C["card"], anchor="w")
-        self._city_done_lbl.pack(fill="x", padx=20, pady=(6, 0))
+        done_lbl.pack(fill="x", padx=20, pady=(6, 0))
+        self._city_done_lbls.append(done_lbl)
 
         # City checklist: search + select all + list
-        self._loc_search_row = tk.Frame(card, bg=C["card"])
-        tk.Label(self._loc_search_row, text="Search cities:",
+        search_row = tk.Frame(card, bg=C["card"])
+        tk.Label(search_row, text="Search cities:",
                  font=("Segoe UI", 9), fg=C["dim"], bg=C["card"]).pack(side="left")
-        loc_search = tk.Entry(self._loc_search_row, textvariable=self.locSearchVar,
+        loc_search = tk.Entry(search_row, textvariable=self.locSearchVar,
                               font=("Segoe UI", 10), bg=C["input"], fg=C["text"],
                               insertbackground=C["accent"], relief="flat", width=24)
         loc_search.pack(side="left", padx=(8, 0), ipady=3)
         loc_search.bind("<KeyRelease>", lambda e: self._render_locations())
+        self._loc_search_rows.append(search_row)
 
-        self._loc_select_all = tk.Checkbutton(
+        select_all = tk.Checkbutton(
             card, text="Select All Cities", variable=self.selectAllLocVar,
             command=self._toggle_all_locations, font=("Segoe UI", 9, "bold"),
             fg=C["accent"], bg=C["card"], activebackground=C["card"],
             activeforeground=C["accent"], selectcolor=C["border"], relief="flat",
             highlightthickness=0, anchor="w")
+        self._loc_select_alls.append(select_all)
 
-        self._loc_list = tk.Frame(card, bg=C["card"])
-        self._loc_list.pack(fill="x", padx=20, pady=(2, 0))
+        list_frame = tk.Frame(card, bg=C["card"])
+        list_frame.pack(fill="x", padx=20, pady=(2, 0))
+        self._loc_list_frames.append(list_frame)
         self._render_locations()
 
     def _on_country_pick(self):
@@ -917,8 +1308,8 @@ class Frontend:
         self._city_vars = {}
         self._city_status = {}
         self._city_done_text = ""
-        if hasattr(self, "_city_done_lbl"):
-            self._city_done_lbl.config(text="")
+        for lbl in self._city_done_lbls:
+            lbl.config(text="")
         self._render_locations()
 
     def _on_state_pick(self):
@@ -937,68 +1328,72 @@ class Frontend:
         self._city_status = {c: "queued" for c in cities}
         self._city_done_text = ""
         self.locSearchVar.set("")
-        if hasattr(self, "_city_done_lbl"):
-            self._city_done_lbl.config(text="")
+        for lbl in self._city_done_lbls:
+            lbl.config(text="")
         self._render_locations()
         self.__log(f"{len(cities)} cities loaded for {self._geo_region_label}. "
                    f"Tick the ones you want (or Select All), then Start Scraping.")
 
     def _render_locations(self):
-        if not hasattr(self, "_loc_list"):
+        """Rebuilds the city checklist in EVERY tab that has the picker
+        (Maps + Web Search), since they all share the same selection."""
+        if not self._loc_list_frames:
             return
-        for w in self._loc_list.winfo_children():
-            w.destroy()
-        self._loc_rows = {}
+        self._loc_rows = {}   # city -> list of status Labels, one per tab
         C = self.C
-
-        if not self._city_hoods:
-            self._loc_search_row.pack_forget()
-            self._loc_select_all.pack_forget()
-            return
-
-        # Show the search bar + Select All only when we have locations
-        self._loc_search_row.pack(anchor="w", padx=20, pady=(8, 2),
-                                  before=self._loc_list)
-        self._loc_select_all.pack(anchor="w", padx=20, pady=(2, 2),
-                                  before=self._loc_list)
 
         query = self.locSearchVar.get().strip().lower()
         visible = [h for h in self._city_hoods if query in h.lower()]
-
         CAP = 400
         shown = visible[:CAP]
         note = (f"{len(visible)} of {len(self._city_hoods)} cities"
                 + (f" — showing first {CAP}, use search to find others"
                    if len(visible) > CAP else "")
                 + "  (checked ones will be scraped):")
-        tk.Label(self._loc_list, text=note, font=("Segoe UI", 8),
-                 fg=C["dim"], bg=C["card"], anchor="w").pack(fill="x")
 
-        # Grid of columns to use the full width (not one item per row)
-        gridf = tk.Frame(self._loc_list, bg=C["card"])
-        gridf.pack(fill="x")
-        cols = 3
-        for c in range(cols):
-            gridf.columnconfigure(c, weight=1, uniform="loc")
+        for idx, list_frame in enumerate(self._loc_list_frames):
+            for w in list_frame.winfo_children():
+                w.destroy()
 
-        for i, h in enumerate(shown):
-            var = self._city_vars.get(h)
-            if var is None:
-                var = tk.IntVar(value=1)
-                self._city_vars[h] = var
-            cell = tk.Frame(gridf, bg=C["card"])
-            r, c = divmod(i, cols)
-            cell.grid(row=r, column=c, sticky="w", padx=(0, 14), pady=1)
-            tk.Checkbutton(cell, text=h, variable=var, font=("Segoe UI", 9),
-                           fg=C["text"], bg=C["card"], activebackground=C["card"],
-                           activeforeground=C["accent"], selectcolor=C["border"],
-                           relief="flat", highlightthickness=0,
-                           anchor="w").pack(side="left")
-            status = self._city_status.get(h, "queued")
-            st = tk.Label(cell, text=status, font=("Segoe UI", 8), fg=C["dim"],
-                          bg=C["card"])
-            st.pack(side="left", padx=(4, 0))
-            self._loc_rows[h] = st
+            search_row = self._loc_search_rows[idx]
+            select_all = self._loc_select_alls[idx]
+
+            if not self._city_hoods:
+                search_row.pack_forget()
+                select_all.pack_forget()
+                continue
+
+            search_row.pack(anchor="w", padx=20, pady=(8, 2), before=list_frame)
+            select_all.pack(anchor="w", padx=20, pady=(2, 2), before=list_frame)
+
+            tk.Label(list_frame, text=note, font=("Segoe UI", 8),
+                     fg=C["dim"], bg=C["card"], anchor="w").pack(fill="x")
+
+            # Grid of columns to use the full width (not one item per row)
+            gridf = tk.Frame(list_frame, bg=C["card"])
+            gridf.pack(fill="x")
+            cols = 3
+            for c in range(cols):
+                gridf.columnconfigure(c, weight=1, uniform="loc")
+
+            for i, h in enumerate(shown):
+                var = self._city_vars.get(h)
+                if var is None:
+                    var = tk.IntVar(value=1)
+                    self._city_vars[h] = var
+                cell = tk.Frame(gridf, bg=C["card"])
+                r, c = divmod(i, cols)
+                cell.grid(row=r, column=c, sticky="w", padx=(0, 14), pady=1)
+                tk.Checkbutton(cell, text=h, variable=var, font=("Segoe UI", 9),
+                               fg=C["text"], bg=C["card"], activebackground=C["card"],
+                               activeforeground=C["accent"], selectcolor=C["border"],
+                               relief="flat", highlightthickness=0,
+                               anchor="w").pack(side="left")
+                status = self._city_status.get(h, "queued")
+                st = tk.Label(cell, text=status, font=("Segoe UI", 8), fg=C["dim"],
+                              bg=C["card"])
+                st.pack(side="left", padx=(4, 0))
+                self._loc_rows.setdefault(h, []).append(st)
 
     def _toggle_all_locations(self):
         value = self.selectAllLocVar.get()
@@ -1011,16 +1406,18 @@ class Frontend:
 
     def _set_loc_status(self, name, status):
         self._city_status[name] = status
-        lbl = self._loc_rows.get(name)
-        if lbl:
-            if status.startswith("✓"):
-                color = self.C["success"]
-            elif "scraping" in status:
-                color = self.C["accent"]
-            elif status.startswith("✗"):
-                color = self.C["warning"] if "warning" in self.C else self.C["dim"]
-            else:
-                color = self.C["dim"]
+        labels = self._loc_rows.get(name) or []
+        if not labels:
+            return
+        if status.startswith("✓"):
+            color = self.C["success"]
+        elif "scraping" in status:
+            color = self.C["accent"]
+        elif status.startswith("✗"):
+            color = self.C.get("warning", self.C["dim"])
+        else:
+            color = self.C["dim"]
+        for lbl in labels:
             lbl.config(text=status, fg=color)
 
     def mark_city_done(self, name):
@@ -1028,8 +1425,8 @@ class Frontend:
 
     def _set_city_done(self, name):
         self._city_done_text = f"✓  {name} — all cities done"
-        if hasattr(self, "_city_done_lbl"):
-            self._city_done_lbl.config(text=self._city_done_text, fg=self.C["success"])
+        for lbl in self._city_done_lbls:
+            lbl.config(text=self._city_done_text, fg=self.C["success"])
 
     # ── Logs viewer ─────────────────────────────────────────────────────────────
     def _open_logs_window(self):

@@ -17,7 +17,14 @@
       "Bash(venv/Scripts/python.exe -m pip install pillow)",
       "Bash(venv/Scripts/python.exe -m pip install dnspython)",
       "Bash(PYTHONIOENCODING=utf-8 ../venv/Scripts/python.exe -c ' *)",
-      "Bash(PYTHONIOENCODING=utf-8 timeout 120 venv/Scripts/python.exe tools/build_neighborhoods.py --country \"United Kingdom\" --limit 3 --out \"C:/Users/dell/AppData/Local/Temp/claude/C--Users-dell-Documents-Google-Maps-Scraper/8cc46f2a-6d92-4e9f-90c3-4c82ca2256fe/scratchpad/nb_test.json\" --sleep 1)"
+      "Bash(PYTHONIOENCODING=utf-8 timeout 120 venv/Scripts/python.exe tools/build_neighborhoods.py --country \"United Kingdom\" --limit 3 --out \"C:/Users/dell/AppData/Local/Temp/claude/C--Users-dell-Documents-Google-Maps-Scraper/8cc46f2a-6d92-4e9f-90c3-4c82ca2256fe/scratchpad/nb_test.json\" --sleep 1)",
+      "Bash(python -c ' *)",
+      "PowerShell(& \"C:\\\\Users\\\\dell\\\\Documents\\\\Google-Maps-Scraper\\\\venv\\\\Scripts\\\\python.exe\" \"C:\\\\Users\\\\dell\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-dell-Documents-Google-Maps-Scraper\\\\88b675e3-f2fb-4c48-be14-8601cc873bd3\\\\scratchpad\\\\check_counts.py\")",
+      "Bash(awk 'NR>=87023 && NR<=87260' dist/logs/leadscrapper.log)",
+      "Bash(awk 'NR>=87023 && NR<=89946' dist/logs/leadscrapper.log)",
+      "Bash(\"./venv/Scripts/python.exe\" -m py_compile app/scraper/frontend.py app/scraper/scraper.py app/scraper/common.py app/scraper/jobstate.py app/scraper/web_scraper.py)",
+      "Bash(\"./venv/Scripts/python.exe\" -m py_compile app/scraper/frontend.py app/scraper/scraper.py app/scraper/common.py app/scraper/jobstate.py app/scraper/web_scraper.py app/scraper/leadfiles.py)",
+      "Bash(timeout 8 ../venv/Scripts/python.exe -c ' *)"
     ],
     "deny": [],
     "ask": []

@@ -12,7 +12,7 @@ from scraper.scroller import Scroller
 from scraper.parser import Parser
 from scraper.datasaver import DataSaver
 from scraper.web_scraper import WebSearchBackend
-from scraper import regions, history, leadfiles
+from scraper import regions, history, leadfiles, jobstate
 from scraper.common import Common
 import undetected_chromedriver as uc
 from settings import DRIVER_EXECUTABLE_PATH
@@ -64,7 +64,8 @@ class Backend(Base):
 
 
     def __init__(self, searchquery, outputformat,  healdessmode, region_scope=None,
-                 directions=None, run_web=False, locations=None, city_name=None):
+                 directions=None, run_web=False, locations=None, city_name=None,
+                 resume_completed=None):
         """
         params:
 
@@ -78,6 +79,10 @@ class Backend(Base):
         directions: optional list of direction words (e.g. ["North", "South West"]).
             When provided, each direction is run as its own search and saved to its
             own separate file, and region_scope is ignored.
+        resume_completed: optional list/set of neighborhood names (from `locations`)
+            that were already scraped in an earlier session — location mode will
+            skip them instead of re-scraping, so a paused/closed 3000+ city batch
+            can pick back up where it left off.
 
         """
 
@@ -90,6 +95,7 @@ class Backend(Base):
         self.run_web = run_web
         self.locations = locations or []     # neighborhood names for a city
         self.city_name = city_name or ""
+        self.resume_completed = set(resume_completed or [])
 
         # All files for this search live in their own folder. In city mode the
         # folder is named "<query> <city>" so each city gets its own folder.
@@ -223,12 +229,20 @@ class Backend(Base):
 
     def _run_web_for(self, query):
         """Run the (browser-free) Web Search for a query into this run's folder.
-        Safe to run in a thread alongside the Maps browser scrape."""
+        Safe to run in a thread alongside the Maps browser scrape.
+
+        Capped at 50 sites/search and shares a domain set across the whole run
+        (self._web_seen_domains) so a chain business found for one direction/
+        city isn't re-scraped for the next — keeps the parallel Web Search from
+        being the slow part of a big batch."""
+        if not hasattr(self, "_web_seen_domains"):
+            self._web_seen_domains = set()
         try:
             WebSearchBackend(
                 query=query.lower(), output_format=self.outputformat,
-                max_results=999999, on_done=lambda: None,
-                output_dir=self.run_dir).run()
+                max_results=50, on_done=lambda: None,
+                output_dir=self.run_dir,
+                global_seen_domains=self._web_seen_domains).run()
         except Exception as e:
             Communicator.show_message(
                 f"Web search error for '{query}': {str(e)[:120]}")
@@ -304,6 +318,9 @@ class Backend(Base):
             for index, (label, query) in enumerate(self.search_tasks, start=1):
                 if Common.close_thread_is_set():
                     break
+                Common.wait_if_paused()
+                if Common.close_thread_is_set():
+                    break
 
                 if total > 1:
                     Communicator.show_message(
@@ -351,6 +368,9 @@ class Backend(Base):
                                   f"Making {total} files (one per direction)...")
 
         for index, word in enumerate(self.directions, start=1):
+            if Common.close_thread_is_set():
+                break
+            Common.wait_if_paused()
             if Common.close_thread_is_set():
                 break
 
@@ -419,14 +439,27 @@ class Backend(Base):
     def _run_locations_mode(self):
         """Search each neighborhood of a city; one file each, ticked as done."""
         total = len(self.locations)
+        completed = list(self.resume_completed)
+        if completed:
+            Communicator.show_message(
+                f"Resuming {self.city_name}: {len(completed)}/{total} already done.")
         Communicator.show_message(
             f"Location mode: {self.city_name} — {total} cities, one file each.")
-        Communicator.set_progress(0, total,
-                                  f"{self.city_name}: 0/{total} cities")
+        Communicator.set_progress(len(completed), total,
+                                  f"{self.city_name}: {len(completed)}/{total} cities")
 
         for index, hood in enumerate(self.locations, start=1):
             if Common.close_thread_is_set():
                 break
+            Common.wait_if_paused()
+            if Common.close_thread_is_set():
+                break
+
+            if hood in self.resume_completed:
+                Communicator.mark_location_status(hood, "✓ done (resumed)")
+                Communicator.set_progress(index, total,
+                                          f"{self.city_name}: {index}/{total} done")
+                continue
 
             if index > 1:
                 self._restart_driver()
@@ -476,6 +509,13 @@ class Backend(Base):
                 query=loc_query, source="Google Maps",
                 scope=f"{self.city_name} / {hood}",
                 records=record_count, output_file=output_file, status=status)
+
+            completed.append(hood)
+            jobstate.save(self.base_query, self.city_name, self.outputformat,
+                         self.headlessMode, self.run_web, self.locations, completed)
+
+        if len(completed) >= total:
+            jobstate.clear()
 
         Communicator.mark_city_done(self.city_name)
 

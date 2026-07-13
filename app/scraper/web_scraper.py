@@ -6,7 +6,7 @@ import pandas as pd
 import urllib3
 import warnings
 from bs4 import BeautifulSoup
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 from scraper.communicator import Communicator
 from scraper.common import Common
 from scraper import history
@@ -20,6 +20,18 @@ BLOCKED = {
     'youtube.com', 'wikipedia.org', 'reddit.com', 'pinterest.com',
     'trustpilot.com', 'glassdoor.com', 'indeed.com', 'amazon.',
     'ebay.', 'google.com', 'google.co.uk', 'bing.com', 'yahoo.com',
+    # Big directories/OTAs/gov portals that turn up for almost any "X in
+    # <town>" search but are never themselves the local business — keeping
+    # them out saves a request and stops them polluting results with generic
+    # head-office contact details that have nothing to do with the town.
+    'tripadvisor.', 'booking.com', 'agoda.com', 'kayak.', 'skyscanner.',
+    'momondo.', 'hotelscombined.', 'hotelplanner.com', 'expedia.',
+    'airbnb.', 'rome2rio.com', 'trivago.', 'zenhotels.com', 'kiwi.com',
+    'edreams.', 'opodo.', 'stressfreecarrental.com', 'carrentals.',
+    'gov.uk', 'vfsglobal.com', 'tlscontact.com', 'travel.state.gov',
+    'thomsonlocal.com', 'worldpopulationreview.com', 'cntraveller.com',
+    'ezilon.com', 'eventbrite.', 'tiktok.com', 'timeanddate.com',
+    'worldtimeserver.com', 'vk.com', 'kinogo', 'wikitravel.org',
 }
 
 SESS = requests.Session()
@@ -32,13 +44,18 @@ SESS.headers.update({
 
 class WebSearchBackend:
 
-    def __init__(self, query, output_format, max_results, on_done, output_dir=None):
+    def __init__(self, query, output_format, max_results, on_done, output_dir=None,
+                 global_seen_domains=None):
         self.query         = query
         self.output_format = output_format
         self.max_results   = max_results
         self.on_done       = on_done
         self.output_dir    = output_dir or OUTPUT_PATH
         self.results       = []
+        # Domains already scraped in this BATCH (e.g. a previous city in the
+        # same Location-mode run). Shared across instances so a chain business
+        # found in Houston isn't re-scraped again for Dallas. None = no sharing.
+        self.global_seen_domains = global_seen_domains
 
     # ── Filter ────────────────────────────────────────────────────────────────
     def _ok(self, url):
@@ -52,22 +69,40 @@ class WebSearchBackend:
     def _search(self):
         seen = set()
         urls = []
+        cap = self.max_results if self.max_results and self.max_results > 0 else None
+
+        def full(_):
+            return cap is not None and len(urls) >= cap
 
         def add(url):
             u = url.split('?')[0].rstrip('/')
-            if u and u not in seen and self._ok(u):
-                seen.add(u)
-                urls.append(u)
+            if not u or u in seen or not self._ok(u):
+                return
+            try:
+                domain = urlparse(u).netloc.lower()
+            except Exception:
+                domain = None
+            if (domain and self.global_seen_domains is not None
+                    and domain in self.global_seen_domains):
+                return  # already scraped this domain earlier in this batch
+            seen.add(u)
+            urls.append(u)
 
         # --- Google ---
         try:
             from googlesearch import search as gsearch
             Communicator.show_message("Searching Google...")
             for url in gsearch(self.query, num_results=100, lang="en", sleep_interval=2):
+                if full(urls):
+                    break
                 add(url)
             Communicator.show_message(f"Google: {len(urls)} results")
         except Exception as e:
             Communicator.show_message(f"Google unavailable ({e}), using DuckDuckGo only...")
+
+        # --- Bing (HTML results page, no API key needed) ---
+        if not full(urls):
+            self._search_bing(add, full)
 
         # --- DuckDuckGo (multiple passes) ---
         variations = [
@@ -76,15 +111,16 @@ class WebSearchBackend:
             self.query + " email",
             self.query + " phone number",
             self.query + " official website",
+            self.query + " head office",
+            self.query + " customer service",
             self.query + " services",
             self.query + " about us",
             self.query + " staff team",
             self.query + " reviews",
             self.query + " booking",
             self.query + " appointment",
+            self.query + " get a quote",
             '"' + self.query + '"',
-            self.query + " 2024",
-            self.query + " 2025",
             self.query + " near me",
             self.query + " local",
             self.query + " best",
@@ -93,46 +129,107 @@ class WebSearchBackend:
             self.query + " directory",
         ]
 
-        try:
+        if not full(urls):
             try:
-                from ddgs import DDGS
-            except ImportError:
-                from duckduckgo_search import DDGS
+                try:
+                    from ddgs import DDGS
+                except ImportError:
+                    from duckduckgo_search import DDGS
 
-            Communicator.show_message(f"Running {len(variations)} DuckDuckGo passes...")
-            with DDGS() as ddgs:
-                for i, q in enumerate(variations):
-                    if Common.close_thread_is_set():
-                        break
-                    try:
-                        hits = list(ddgs.text(q, max_results=500))
-                        time.sleep(1.5)
-                        before = len(urls)
-                        for h in hits:
-                            add(h.get('href', ''))
-                        Communicator.show_message(
-                            f"Pass {i+1}/{len(variations)}: +{len(urls)-before} new  (total: {len(urls)})")
-                    except Exception as e:
-                        Communicator.show_message(f"Pass {i+1} error: {e}")
-        except Exception as e:
-            Communicator.show_message(f"DDG error: {e}")
+                Communicator.show_message(f"Running {len(variations)} DuckDuckGo passes...")
+                with DDGS() as ddgs:
+                    for i, q in enumerate(variations):
+                        if Common.close_thread_is_set() or full(urls):
+                            break
+                        try:
+                            hits = list(ddgs.text(q, max_results=500))
+                            time.sleep(1.5)
+                            before = len(urls)
+                            for h in hits:
+                                if full(urls):
+                                    break
+                                add(h.get('href', ''))
+                            Communicator.show_message(
+                                f"Pass {i+1}/{len(variations)}: +{len(urls)-before} new  (total: {len(urls)})")
+                        except Exception as e:
+                            Communicator.show_message(f"Pass {i+1} error: {e}")
+            except Exception as e:
+                Communicator.show_message(f"DDG error: {e}")
 
+        if cap:
+            urls = urls[:cap]
         Communicator.show_message(f"\nFound {len(urls)} unique websites. Scraping all of them...\n")
         return urls
 
+    def _search_bing(self, add, full):
+        """Scrape Bing's plain HTML results page — no API key required."""
+        try:
+            Communicator.show_message("Searching Bing...")
+            headers = dict(SESS.headers)
+            found = 0
+            for page in range(3):  # ~10 results per page, 3 pages = up to ~30
+                if Common.close_thread_is_set() or full(None):
+                    break
+                first = page * 10 + 1
+                url = f"https://www.bing.com/search?q={quote(self.query)}&first={first}"
+                try:
+                    resp = requests.get(url, headers=headers, timeout=10, verify=False)
+                    soup = BeautifulSoup(resp.text, "html.parser")
+                except Exception:
+                    break
+                links = [a.get("href") for a in soup.select("li.b_algo h2 a") if a.get("href")]
+                if not links:
+                    break
+                for href in links:
+                    add(href)
+                    found += 1
+                time.sleep(1.2)
+            Communicator.show_message(f"Bing: {found} results checked")
+        except Exception as e:
+            Communicator.show_message(f"Bing unavailable ({e})")
+
     # ── Extractors ────────────────────────────────────────────────────────────
+    # Elements whose text/attribute content is markup, not something a visitor
+    # reads — leaving these in is what let SVG icon path data, base64, and CSS
+    # sprite filenames get picked up as fake phone numbers/emails.
+    _NON_VISIBLE_TAGS = ('script', 'style', 'svg', 'noscript', 'path', 'img',
+                         'picture', 'source', 'template')
+
+    @classmethod
+    def _visible_text(cls, soup):
+        for tag in soup(cls._NON_VISIBLE_TAGS):
+            tag.decompose()
+        return soup.get_text(separator=' ')
+
     def _get_emails(self, text):
         SKIP = {'noreply', 'no-reply', 'example', 'domain', 'test@',
                 'sentry', 'youremail', 'placeholder', 'user@', 'name@'}
+        ASSET_EXT = ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.ico',
+                    '.css', '.js', '.json', '.woff', '.woff2')
         raw = re.findall(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", text)
         return list({e for e in raw
                      if re.match(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9\-]+\.[a-zA-Z]{2,}$", e)
-                     and not any(s in e.lower() for s in SKIP)})
+                     and not any(s in e.lower() for s in SKIP)
+                     and not e.lower().endswith(ASSET_EXT)})
 
     def _get_phones(self, text):
         raw = re.findall(r'[\+]?[\d][\d\s\.\-\(\)]{7,18}[\d]', text)
-        return list({re.sub(r'\s+', ' ', p).strip() for p in raw
-                     if len(re.sub(r'\D', '', p)) >= 7})
+        out = set()
+        for p in raw:
+            p = p.strip()
+            digits = re.sub(r'\D', '', p)
+            if not (7 <= len(digits) <= 15):
+                continue
+            # A real phone number, as printed on a page, almost always has a
+            # space/dash/dot/parenthesis in it (or a leading +). A bare,
+            # unformatted run of 8-19 digits out of context is far more often
+            # a timestamp, partner ID, or coordinate than a phone number.
+            if p.replace('+', '').isdigit() and not p.startswith('+'):
+                continue
+            if re.match(r'^(19|20)\d{2}[\-./]\d{2}[\-./]\d{2}$', p):
+                continue  # ISO-ish date, not a phone
+            out.add(re.sub(r'\s+', ' ', p))
+        return list(out)
 
     def _get_name(self, soup):
         for prop in ['og:site_name', 'og:title']:
@@ -269,6 +366,11 @@ class WebSearchBackend:
                 data = self._scrape(url)
                 if data:
                     self.results.append(data)
+                if self.global_seen_domains is not None:
+                    try:
+                        self.global_seen_domains.add(urlparse(url).netloc.lower())
+                    except Exception:
+                        pass
             self._save()
         finally:
             self.on_done()
