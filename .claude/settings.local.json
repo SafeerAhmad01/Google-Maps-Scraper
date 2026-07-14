@@ -39,7 +39,10 @@
       "Bash(\"./venv/Scripts/python.exe\" tools/build_uk_areas.py --only \"Bristol\")",
       "Bash(\"./venv/Scripts/python.exe\" tools/build_uk_areas.py --sleep 0.6)",
       "Bash(tee \"C:\\\\Users\\\\dell\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-dell-Documents-Google-Maps-Scraper\\\\88b675e3-f2fb-4c48-be14-8601cc873bd3\\\\scratchpad\\\\build_uk_areas_run.log\")",
-      "Bash(./venv/Scripts/python.exe -c ' *)"
+      "Bash(./venv/Scripts/python.exe -c ' *)",
+      "Bash(tee \"C:\\\\Users\\\\dell\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-dell-Documents-Google-Maps-Scraper\\\\88b675e3-f2fb-4c48-be14-8601cc873bd3\\\\scratchpad\\\\build_uk_areas_run2.log\")",
+      "Bash(\"./venv/Scripts/python.exe\" tools/merge_uk_areas.py)",
+      "Bash(\"./venv/Scripts/python.exe\" -m py_compile tools/build_uk_areas.py tools/merge_uk_areas.py)"
     ],
     "deny": [],
     "ask": []

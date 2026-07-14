@@ -63,6 +63,20 @@ _TITLE_TEMPLATES = [
     "List of settlements in {p}",
 ]
 
+# Many cities (Manchester, Sheffield, Liverpool, ...) don't have a "List of
+# areas in X" ARTICLE, but Wikipedia almost always still has a CATEGORY
+# grouping the area/suburb articles together — and category membership needs
+# no wikitext parsing at all, just the article titles themselves.
+_CATEGORY_TEMPLATES = [
+    "Category:Areas of {p}",
+    "Category:Districts of {p}",
+    "Category:Suburbs of {p}",
+    "Category:Neighbourhoods of {p}",
+    "Category:Neighborhoods of {p}",
+    "Category:Places in {p}",
+    "Category:Wards of {p}",
+]
+
 _CUT_HEADINGS = re.compile(
     r"^==+\s*(References|See also|External links|Notes|Sources|"
     r"Bibliography|Footnotes)\s*==+", re.MULTILINE | re.IGNORECASE)
@@ -129,31 +143,67 @@ def _search_best_title(place):
     return None
 
 
+def _extract_name(item):
+    """Pull a clean place name out of one bullet-list item or table cell —
+    handles a piped wikilink, a plain wikilink (stripping a disambiguation
+    suffix like "(Birmingham)"), or plain text."""
+    m = re.search(r"\[\[([^\]|]+)\|([^\]]+)\]\]", item)   # piped link
+    if m:
+        name = m.group(2).strip()
+    else:
+        m = re.search(r"\[\[([^\]|]+)\]\]", item)          # plain link
+        if m:
+            name = re.sub(r"\s*\([^)]*\)\s*$", "", m.group(1)).strip()
+        else:
+            name = re.sub(r"'''?|\[\[|\]\]", "", item).split("|")[-1].strip()
+    return name.strip(" .")
+
+
+def _valid_name(name):
+    return bool(name) and 1 < len(name) < 60 and not name.lower().startswith("http")
+
+
 def _parse_area_list(wikitext):
-    """Pull area names out of Wikipedia's flat "* [[Name]]" bullet-list style,
-    stopping before References/See also/etc. so citations don't leak in."""
+    """Pull area names out of a Wikipedia "list of areas/places" page.
+
+    These pages come in two common shapes, so both are handled:
+      - a flat bullet list:      "* [[Acocks Green]]"
+      - a sortable wikitable:    "| [[Aberford]] || [[Harewood]] || ..."
+        (first cell only — the rest are ward/postcode/etc columns)
+
+    Table-cell lines are only read while genuinely INSIDE a "{| ... |}"
+    wikitable block — otherwise "| param = value" lines from an unrelated
+    {{Infobox ...}} template elsewhere on the page (which use the same
+    leading "|") get misread as list entries.
+
+    Stops before References/See also/etc. so citations don't leak in.
+    """
     cut = _CUT_HEADINGS.search(wikitext)
     body = wikitext[:cut.start()] if cut else wikitext
 
     areas = []
-    for line in body.splitlines():
-        line = line.strip()
-        if not line.startswith("*"):
+    table_depth = 0
+    for raw_line in body.splitlines():
+        line = raw_line.strip()
+
+        if line.startswith("{|"):
+            table_depth += 1
             continue
-        item = line.lstrip("*").strip()
+        if line.startswith("|}"):
+            table_depth = max(0, table_depth - 1)
+            continue
 
-        m = re.search(r"\[\[([^\]|]+)\|([^\]]+)\]\]", item)   # piped link
-        if m:
-            name = m.group(2).strip()
+        if line.startswith("*"):
+            item = line.lstrip("*").strip()
+        elif table_depth > 0 and line.startswith("|") and not line.startswith(("|-", "|+", "!")):
+            item = line.lstrip("|").split("||")[0].strip()
+            if not item or "=" in item.split("[[")[0]:
+                continue   # a cell-formatting attribute (e.g. class="..."), not content
         else:
-            m = re.search(r"\[\[([^\]|]+)\]\]", item)          # plain link
-            if m:
-                name = re.sub(r"\s*\([^)]*\)\s*$", "", m.group(1)).strip()
-            else:
-                name = re.sub(r"'''?|\[\[|\]\]", "", item).split("|")[-1].strip()
+            continue
 
-        name = name.strip(" .")
-        if name and 1 < len(name) < 60 and not name.lower().startswith("http"):
+        name = _extract_name(item)
+        if _valid_name(name):
             areas.append(name)
 
     seen, out = set(), []
@@ -165,24 +215,73 @@ def _parse_area_list(wikitext):
     return out
 
 
+def _category_members(place):
+    """Article titles from a "Category:Areas of X"-style category — the
+    fallback for cities (Manchester, Sheffield, Liverpool, ...) that have no
+    "List of areas in X" article but do group their suburb articles this way.
+    No wikitext parsing needed: category membership IS the area list."""
+    for template in _CATEGORY_TEMPLATES:
+        cat_title = template.format(p=place)
+        data = _api_get({
+            "action": "query", "list": "categorymembers",
+            "cmtitle": cat_title, "cmlimit": 500, "cmnamespace": 0,
+            "format": "json", "formatversion": 2,
+        })
+        if not data:
+            continue
+        members = data.get("query", {}).get("categorymembers", [])
+        if len(members) >= 5:
+            names = []
+            for m in members:
+                # Category article titles are often disambiguated as
+                # "Name, City" or "Name (City)" — neither form has a piped
+                # short display like the list-page links do, so strip both
+                # disambiguation styles ourselves to get the plain area name.
+                name = re.sub(r"\s*\([^)]*\)\s*$", "", m["title"])
+                name = re.sub(r",\s*[^,]+$", "", name).strip()
+                if _valid_name(name):
+                    names.append(name)
+            return names
+    return []
+
+
 def fetch_areas(place):
     """Returns a list of area names for `place`, or [] if nothing usable
-    was found on Wikipedia."""
+    was found on Wikipedia. Tries, in order:
+      1. Direct "List of areas/districts/wards/... in X" article guesses.
+      2. A "Category:Areas of X"-style category (works for cities that group
+         suburb articles this way but have no single list article).
+      3. A generic full-text search as a last resort.
+    Keeps the BEST (longest) result across all tiers tried, rather than
+    stopping at the first one that clears a low bar — a category with 20
+    members shouldn't beat a list article with 150 entries just because it
+    was tried first."""
+    best = []
+
     for template in _TITLE_TEMPLATES:
         title = template.format(p=place)
         wt = _page_wikitext(title)
         if wt:
             areas = _parse_area_list(wt)
-            if len(areas) >= 5:
-                return areas
+            if len(areas) > len(best):
+                best = areas
+            if len(best) >= 30:   # clearly a good list article — no need to keep guessing titles
+                return best
 
-    fallback_title = _search_best_title(place)
-    if fallback_title:
-        wt = _page_wikitext(fallback_title)
-        if wt:
-            return _parse_area_list(wt)
+    cat_areas = _category_members(place)
+    if len(cat_areas) > len(best):
+        best = cat_areas
 
-    return []
+    if len(best) < 15:
+        fallback_title = _search_best_title(place)
+        if fallback_title:
+            wt = _page_wikitext(fallback_title)
+            if wt:
+                areas = _parse_area_list(wt)
+                if len(areas) > len(best):
+                    best = areas
+
+    return best
 
 
 def _load_json(path, default):
