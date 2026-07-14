@@ -28,7 +28,18 @@
       "Bash(timeout 30 ../venv/Scripts/python.exe -c ' *)",
       "Bash(\"./venv/Scripts/python.exe\" -m py_compile app/scraper/web_scraper.py)",
       "Bash(timeout 40 ../venv/Scripts/python.exe -c ' *)",
-      "Bash(timeout 20 ../venv/Scripts/python.exe -c ' *)"
+      "Bash(timeout 20 ../venv/Scripts/python.exe -c ' *)",
+      "WebSearch",
+      "WebFetch(domain:en.wikipedia.org)",
+      "Bash(timeout 1 echo ok)",
+      "Bash(\"./venv/Scripts/python.exe\" -c \"import wikipediaapi\")",
+      "Bash(\"./venv/Scripts/python.exe\" -c \"import requests; print\\('requests OK'\\)\")",
+      "Bash(\"./venv/Scripts/python.exe\" tools/merge_uk_areas.py --source \"C:\\\\Users\\\\dell\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-dell-Documents-Google-Maps-Scraper\\\\88b675e3-f2fb-4c48-be14-8601cc873bd3\\\\scratchpad\\\\leftover_agent_data.json\")",
+      "Bash(cp \"C:\\\\Users\\\\dell\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-dell-Documents-Google-Maps-Scraper\\\\88b675e3-f2fb-4c48-be14-8601cc873bd3\\\\scratchpad\\\\leftover_agent_data.json\" tools/uk_areas_progress.json)",
+      "Bash(\"./venv/Scripts/python.exe\" tools/build_uk_areas.py --only \"Bristol\")",
+      "Bash(\"./venv/Scripts/python.exe\" tools/build_uk_areas.py --sleep 0.6)",
+      "Bash(tee \"C:\\\\Users\\\\dell\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-dell-Documents-Google-Maps-Scraper\\\\88b675e3-f2fb-4c48-be14-8601cc873bd3\\\\scratchpad\\\\build_uk_areas_run.log\")",
+      "Bash(./venv/Scripts/python.exe -c ' *)"
     ],
     "deny": [],
     "ask": []
