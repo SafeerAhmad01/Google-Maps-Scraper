@@ -61,6 +61,11 @@ _TITLE_TEMPLATES = [
     "List of wards in {p}",
     "List of places in {p}",
     "List of settlements in {p}",
+    "List of civil parishes in {p}",
+    "List of towns and villages in {p}",
+    "List of towns in {p}",
+    "List of villages in {p}",
+    "List of villages, towns and cities in {p}",
 ]
 
 # Many cities (Manchester, Sheffield, Liverpool, ...) don't have a "List of
@@ -75,6 +80,10 @@ _CATEGORY_TEMPLATES = [
     "Category:Neighborhoods of {p}",
     "Category:Places in {p}",
     "Category:Wards of {p}",
+    "Category:Civil parishes in {p}",
+    "Category:Villages in {p}",
+    "Category:Towns in {p}",
+    "Category:Settlements in {p}",
 ]
 
 _CUT_HEADINGS = re.compile(
