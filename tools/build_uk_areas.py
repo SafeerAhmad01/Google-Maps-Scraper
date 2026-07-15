@@ -112,7 +112,30 @@ def _api_get(params, retries=3):
     return None
 
 
-def _page_wikitext(title):
+def _place_words(place):
+    """Significant words from a place name, for checking a resolved page
+    title is actually ABOUT that place (not just similarly-titled)."""
+    stop = {"and", "of", "the", "upon", "on", "in"}
+    return {w.lower() for w in re.findall(r"[A-Za-z]+", place) if w.lower() not in stop}
+
+
+def _title_matches_place(resolved_title, place):
+    """A guessed/found title can silently redirect to an unrelated, broader
+    page — e.g. "List of districts in Camden" is a real Wikipedia REDIRECT
+    that forwards to "List of districts of London" (Camden being a London
+    borough), which is a totally different, much bigger article. Guard
+    against that by requiring the page Wikipedia actually resolved to still
+    mentions the place we asked about."""
+    words = _place_words(place)
+    if not words:
+        return True
+    title_lower = resolved_title.lower()
+    return any(w in title_lower for w in words)
+
+
+def _page_wikitext(title, place=None):
+    """Returns the page's wikitext, or None if it doesn't exist OR (when
+    `place` is given) it turned out to be a redirect to an unrelated page."""
     data = _api_get({
         "action": "parse", "page": title, "prop": "wikitext",
         "format": "json", "formatversion": 2, "redirects": 1,
@@ -120,6 +143,9 @@ def _page_wikitext(title):
     if not data or "error" in data:
         return None
     try:
+        resolved_title = data["parse"]["title"]
+        if place and not _title_matches_place(resolved_title, place):
+            return None
         return data["parse"]["wikitext"]
     except (KeyError, TypeError):
         return None
@@ -137,8 +163,9 @@ def _search_best_title(place):
     hits = data.get("query", {}).get("search", [])
     for h in hits:
         title = h.get("title", "")
-        if re.search(r"^List of (areas|districts|wards|localities|places|settlements)\b",
-                    title, re.IGNORECASE):
+        if (re.search(r"^List of (areas|districts|wards|localities|places|settlements)\b",
+                      title, re.IGNORECASE)
+                and _title_matches_place(title, place)):
             return title
     return None
 
@@ -163,18 +190,41 @@ def _valid_name(name):
     return bool(name) and 1 < len(name) < 60 and not name.lower().startswith("http")
 
 
+def _row_cells(row_lines):
+    """Split one table row's raw lines into individual cell strings. Handles
+    both wikitable styles Wikipedia uses:
+      - single-line, "||"-separated:  "| [[Aberford]] || [[Harewood]] || ..."
+      - one cell per line:            "|\\n|[[Addington]]\\n| \\n|[[Suburb]]..."
+    """
+    cells = []
+    for line in row_lines:
+        line = line.strip()
+        if not line.startswith("|") or line.startswith(("|-", "|+")):
+            continue
+        content = line[1:]
+        # A leading "attr |" (e.g. class="unsortable" scope="col" | Image) is
+        # a cell-formatting prefix, not content — drop it if present.
+        if "|" in content and "[[" not in content.split("|")[0]:
+            content = content.split("|", 1)[1]
+        cells.extend(c.strip() for c in content.split("||"))
+    return cells
+
+
 def _parse_area_list(wikitext):
     """Pull area names out of a Wikipedia "list of areas/places" page.
 
-    These pages come in two common shapes, so both are handled:
-      - a flat bullet list:      "* [[Acocks Green]]"
-      - a sortable wikitable:    "| [[Aberford]] || [[Harewood]] || ..."
-        (first cell only — the rest are ward/postcode/etc columns)
+    Two common shapes are handled:
+      - a flat bullet list: "* [[Acocks Green]]"
+      - a sortable wikitable, in EITHER of its two cell-layout styles (see
+        _row_cells). For a table, each row's NAME is taken as the first cell
+        that actually contains a wikilink — not just "the first cell" — since
+        many of these tables lead with a blank Image column, or one cell per
+        line rather than one row per line (Cornwall's page is exactly this:
+        column 1 is a blank Image cell, so the place name is really column 2).
 
-    Table-cell lines are only read while genuinely INSIDE a "{| ... |}"
-    wikitable block — otherwise "| param = value" lines from an unrelated
-    {{Infobox ...}} template elsewhere on the page (which use the same
-    leading "|") get misread as list entries.
+    Table content is only read while genuinely INSIDE a "{| ... |}" block —
+    otherwise "| param = value" lines from an unrelated {{Infobox ...}}
+    template elsewhere on the page (same leading "|") get misread as rows.
 
     Stops before References/See also/etc. so citations don't leak in.
     """
@@ -183,28 +233,46 @@ def _parse_area_list(wikitext):
 
     areas = []
     table_depth = 0
+    current_row = []
+
+    def flush_row():
+        for cell in _row_cells(current_row):
+            if "[[" in cell:
+                name = _extract_name(cell)
+                if _valid_name(name):
+                    areas.append(name)
+                return   # only the first linked cell in the row is the name
+
     for raw_line in body.splitlines():
         line = raw_line.strip()
 
         if line.startswith("{|"):
             table_depth += 1
+            current_row = []
             continue
         if line.startswith("|}"):
+            if table_depth > 0:
+                flush_row()
             table_depth = max(0, table_depth - 1)
+            current_row = []
             continue
 
         if line.startswith("*"):
-            item = line.lstrip("*").strip()
-        elif table_depth > 0 and line.startswith("|") and not line.startswith(("|-", "|+", "!")):
-            item = line.lstrip("|").split("||")[0].strip()
-            if not item or "=" in item.split("[[")[0]:
-                continue   # a cell-formatting attribute (e.g. class="..."), not content
-        else:
+            name = _extract_name(line.lstrip("*").strip())
+            if _valid_name(name):
+                areas.append(name)
             continue
 
-        name = _extract_name(item)
-        if _valid_name(name):
-            areas.append(name)
+        if table_depth > 0:
+            if line.startswith("!"):
+                current_row = []           # header row — ignore its cells
+                continue
+            if line.startswith("|-"):
+                flush_row()
+                current_row = []
+                continue
+            if line.startswith("|"):
+                current_row.append(line)
 
     seen, out = set(), []
     for a in areas:
@@ -260,7 +328,7 @@ def fetch_areas(place):
 
     for template in _TITLE_TEMPLATES:
         title = template.format(p=place)
-        wt = _page_wikitext(title)
+        wt = _page_wikitext(title, place=place)
         if wt:
             areas = _parse_area_list(wt)
             if len(areas) > len(best):
@@ -275,7 +343,7 @@ def fetch_areas(place):
     if len(best) < 15:
         fallback_title = _search_best_title(place)
         if fallback_title:
-            wt = _page_wikitext(fallback_title)
+            wt = _page_wikitext(fallback_title, place=place)
             if wt:
                 areas = _parse_area_list(wt)
                 if len(areas) > len(best):
