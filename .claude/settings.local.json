@@ -54,7 +54,8 @@
       "Bash(curl -s -o admin2.txt \"https://download.geonames.org/export/dump/admin2Codes.txt\")",
       "Bash(\"./venv/Scripts/python.exe\" -m py_compile tools/build_uk_areas_geonames.py)",
       "Bash(\"./venv/Scripts/python.exe\" tools/build_uk_areas_geonames.py)",
-      "Bash(\"./venv/Scripts/python.exe\" tools/merge_uk_areas.py --source tools/uk_areas_geonames.json --min-areas 5)"
+      "Bash(\"./venv/Scripts/python.exe\" tools/merge_uk_areas.py --source tools/uk_areas_geonames.json --min-areas 5)",
+      "Bash(timeout 15 ../venv/Scripts/python.exe -c ' *)"
     ],
     "deny": [],
     "ask": []
