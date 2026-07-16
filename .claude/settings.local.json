@@ -44,7 +44,8 @@
       "Bash(\"./venv/Scripts/python.exe\" tools/merge_uk_areas.py)",
       "Bash(\"./venv/Scripts/python.exe\" -m py_compile tools/build_uk_areas.py tools/merge_uk_areas.py)",
       "Bash(\"./venv/Scripts/python.exe\" -m py_compile tools/build_uk_areas.py)",
-      "Bash(\"./venv/Scripts/python.exe\" tools/build_uk_areas.py --only \"Camden,Tower Hamlets,Richmond upon Thames,Greenwich,Lewisham,Croydon,Redbridge,Kensington and Chelsea,Havering,Westminster,Islington,Lambeth,Southwark,Hammersmith and Fulham,Hillingdon,Harrow,Bromley,Haringey,Ealing,Wakefield\" --sleep 0.5)"
+      "Bash(\"./venv/Scripts/python.exe\" tools/build_uk_areas.py --only \"Camden,Tower Hamlets,Richmond upon Thames,Greenwich,Lewisham,Croydon,Redbridge,Kensington and Chelsea,Havering,Westminster,Islington,Lambeth,Southwark,Hammersmith and Fulham,Hillingdon,Harrow,Bromley,Haringey,Ealing,Wakefield\" --sleep 0.5)",
+      "Bash(\"./venv/Scripts/python.exe\" tools/merge_uk_areas.py --source tools/london_boroughs.json --min-areas 5)"
     ],
     "deny": [],
     "ask": []
