@@ -45,7 +45,16 @@
       "Bash(\"./venv/Scripts/python.exe\" -m py_compile tools/build_uk_areas.py tools/merge_uk_areas.py)",
       "Bash(\"./venv/Scripts/python.exe\" -m py_compile tools/build_uk_areas.py)",
       "Bash(\"./venv/Scripts/python.exe\" tools/build_uk_areas.py --only \"Camden,Tower Hamlets,Richmond upon Thames,Greenwich,Lewisham,Croydon,Redbridge,Kensington and Chelsea,Havering,Westminster,Islington,Lambeth,Southwark,Hammersmith and Fulham,Hillingdon,Harrow,Bromley,Haringey,Ealing,Wakefield\" --sleep 0.5)",
-      "Bash(\"./venv/Scripts/python.exe\" tools/merge_uk_areas.py --source tools/london_boroughs.json --min-areas 5)"
+      "Bash(\"./venv/Scripts/python.exe\" tools/merge_uk_areas.py --source tools/london_boroughs.json --min-areas 5)",
+      "Bash(curl -sI \"https://download.geonames.org/export/dump/GB.zip\")",
+      "Bash(curl -s -o GB.zip \"https://download.geonames.org/export/dump/GB.zip\")",
+      "Bash(unzip -o GB.zip)",
+      "Bash(awk -F'\\\\t' '$7==\"P\"' GB.txt)",
+      "Bash(curl -s -o admin1.txt \"https://download.geonames.org/export/dump/admin1CodesASCII.txt\")",
+      "Bash(curl -s -o admin2.txt \"https://download.geonames.org/export/dump/admin2Codes.txt\")",
+      "Bash(\"./venv/Scripts/python.exe\" -m py_compile tools/build_uk_areas_geonames.py)",
+      "Bash(\"./venv/Scripts/python.exe\" tools/build_uk_areas_geonames.py)",
+      "Bash(\"./venv/Scripts/python.exe\" tools/merge_uk_areas.py --source tools/uk_areas_geonames.json --min-areas 5)"
     ],
     "deny": [],
     "ask": []
