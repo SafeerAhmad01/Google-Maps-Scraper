@@ -59,7 +59,8 @@
       "Bash(curl -s -o AE.zip \"https://download.geonames.org/export/dump/AE.zip\")",
       "Bash(unzip -o AE.zip AE.txt)",
       "Bash(timeout 10 ../venv/Scripts/python.exe -c ' *)",
-      "Bash(\"./venv/Scripts/python.exe\" -m py_compile app/scraper/scraper.py app/scraper/frontend.py app/scraper/web_scraper.py app/scraper/leadfiles.py)"
+      "Bash(\"./venv/Scripts/python.exe\" -m py_compile app/scraper/scraper.py app/scraper/frontend.py app/scraper/web_scraper.py app/scraper/leadfiles.py)",
+      "Bash(\"./venv/Scripts/python.exe\" -m py_compile app/scraper/scraper.py)"
     ],
     "deny": [],
     "ask": []

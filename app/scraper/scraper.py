@@ -6,6 +6,7 @@ that will handle scraping process
 import os
 import re
 import threading
+import requests
 from time import sleep
 from scraper.base import Base
 from scraper.scroller import Scroller
@@ -16,6 +17,30 @@ from scraper import regions, history, leadfiles, jobstate
 from scraper.common import Common
 import undetected_chromedriver as uc
 from settings import DRIVER_EXECUTABLE_PATH
+
+
+# Google Maps pads thin result sets (small towns with few genuine matches)
+# with loosely-related nearby businesses — taxis, hotels, tire shops,
+# churches. This keyword list defines what actually counts as relevant for a
+# travel agency's business: the core service plus everything it also sells
+# (visas, transfers, hotel bookings, flights).
+_RELEVANT_CATEGORY_KEYWORDS = (
+    # core travel agency
+    "travel", "tour", "agent", "agency", "cruise", "holiday", "vacation",
+    "excursion", "sightseeing",
+    # visa / immigration
+    "visa", "immigration", "passport",
+    # transfer / transport
+    "taxi", "transfer", "transport", "car rental", "car hire",
+    "chauffeur", "shuttle", "coach",
+    # hotel / accommodation
+    "hotel", "motel", "resort", "lodging", "accommodation",
+    "guest house", "hostel", "holiday home", "holiday apartment",
+    "holiday rental", "vacation rental", "bed and breakfast", "b&b",
+    "cottage", "villa",
+    # flights
+    "flight", "airline", "airport", "air charter",
+)
 
 
 def _chrome_major_version():
@@ -198,6 +223,39 @@ class Backend(Base):
             unique.append(row)
         return unique
 
+    @staticmethod
+    def _website_looks_relevant(url):
+        """For a business with no Category at all, check its own website's
+        title/description for our keywords instead of guessing. Keeps the
+        result if the site mentions something relevant, drops it if the site
+        clearly says it's something else, and keeps it (benefit of the
+        doubt) if the site can't be reached at all."""
+        if not url:
+            return True
+        try:
+            resp = requests.get(url, timeout=6, verify=False,
+                               headers={"User-Agent": "Mozilla/5.0"})
+            text = resp.text[:20000].lower()
+        except Exception:
+            return True
+        return any(kw in text for kw in _RELEVANT_CATEGORY_KEYWORDS)
+
+    def _filter_relevant(self, rows):
+        """Drop results whose Google Maps category has nothing to do with
+        the business being searched for (see _RELEVANT_CATEGORY_KEYWORDS).
+        No category at all -> check the business's own website instead of
+        guessing; no website either -> keep it, we can't judge it."""
+        kept = []
+        for row in rows:
+            category = str(row.get("Category") or "").strip().lower()
+            if category and category != "nan":
+                if any(kw in category for kw in _RELEVANT_CATEGORY_KEYWORDS):
+                    kept.append(row)
+                continue
+            if self._website_looks_relevant(row.get("Website")):
+                kept.append(row)
+        return kept
+
     def _scrape_query(self, query, parser):
         """Open a single Google Maps search and parse its results into parser.
 
@@ -340,7 +398,7 @@ class Backend(Base):
                 Communicator.set_progress(index, total, f"Searched {label}")
 
             # Merge + de-duplicate everything, then save a single file.
-            data = self._dedupe(parser.finalData)
+            data = self._filter_relevant(self._dedupe(parser.finalData))
             record_count = len(data)
             Communicator.show_message(
                 f"Creating 1 file with {record_count} merged records...")
@@ -416,7 +474,7 @@ class Backend(Base):
                 parser = Parser(self.driver)  # fresh parser => separate results/file
                 self._scrape_query(direction_query, parser)
 
-                data = self._dedupe(parser.finalData)
+                data = self._filter_relevant(self._dedupe(parser.finalData))
                 for row in data:
                     row["Location"] = word
                 record_count = len(data)
@@ -500,7 +558,7 @@ class Backend(Base):
             try:
                 parser = Parser(self.driver)
                 self._scrape_query(loc_query, parser)
-                data = self._dedupe(parser.finalData)
+                data = self._filter_relevant(self._dedupe(parser.finalData))
                 for row in data:
                     row["Location"] = f"{hood}, {self.city_name}".strip(", ")
                 record_count = len(data)
