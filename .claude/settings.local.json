@@ -60,7 +60,9 @@
       "Bash(unzip -o AE.zip AE.txt)",
       "Bash(timeout 10 ../venv/Scripts/python.exe -c ' *)",
       "Bash(\"./venv/Scripts/python.exe\" -m py_compile app/scraper/scraper.py app/scraper/frontend.py app/scraper/web_scraper.py app/scraper/leadfiles.py)",
-      "Bash(\"./venv/Scripts/python.exe\" -m py_compile app/scraper/scraper.py)"
+      "Bash(\"./venv/Scripts/python.exe\" -m py_compile app/scraper/scraper.py)",
+      "Bash(\"./venv/Scripts/python.exe\" -m py_compile tools/build_uae_areas.py)",
+      "Bash(\"./venv/Scripts/python.exe\" tools/build_uae_areas.py)"
     ],
     "deny": [],
     "ask": []
