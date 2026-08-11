@@ -131,8 +131,8 @@ def compile_folder(run_dir, output_format, query):
 
     # Put the important lead columns first
     front = [c for c in ("Name", "Email", "Phone", "Phone (Formatted)", "WhatsApp",
-                         "Website", "Category", "City", "State", "Zip", "Country",
-                         "Facebook", "Instagram", "LinkedIn", "Twitter/X",
+                         "Website", "Category", "Location", "City", "State", "Zip",
+                         "Country", "Facebook", "Instagram", "LinkedIn", "Twitter/X",
                          "Contact Person", "Address")
              if c in leads.columns]
     rest = [c for c in leads.columns if c not in front]
@@ -150,4 +150,33 @@ def compile_folder(run_dir, output_format, query):
     except Exception:
         return None
 
-    return path, len(leads)
+    sales_path, sales_n = _save_sales_team_file(leads, run_dir, output_format, query, ext)
+
+    return path, len(leads), sales_path, sales_n
+
+
+def _save_sales_team_file(leads, run_dir, output_format, query, ext):
+    """A second, slim file for the sales team: just the columns they need to
+    reach out — Name, Type, Email, Phone, Website, Location — nothing else.
+    Built from `leads` (already filtered to rows with an email or phone)."""
+    sales = pd.DataFrame({
+        "Name":     _col(leads, "Name"),
+        "Type":     _col(leads, "Category"),
+        "Email":    _col(leads, "Email"),
+        "Phone":    _col(leads, "Phone"),
+        "Website":  _col(leads, "Website"),
+        "Location": _col(leads, "Location"),
+    })
+
+    path = os.path.join(run_dir, f"SALES TEAM - {sanitize(query)}{ext}")
+    try:
+        if output_format == "csv":
+            sales.to_csv(path, index=False)
+        elif output_format == "json":
+            sales.to_json(path, indent=4, orient="records")
+        else:
+            sales.to_excel(path, index=False)
+    except Exception:
+        return None, 0
+
+    return path, len(sales)

@@ -965,9 +965,12 @@ class Frontend:
             try:
                 result = leadfiles.compile_folder(run_dir, fmt, query)
                 if result:
-                    path, n = result
+                    path, n, sales_path, sales_n = result
                     self.__log(f"★ MAIN file updated: {os.path.basename(path)} "
                                f"— {n} clean leads so far.")
+                    if sales_path:
+                        self.__log(f"★ Sales team file updated: "
+                                  f"{os.path.basename(sales_path)} — {sales_n} rows.")
                     history.add_entry(
                         query=query, source="MAIN compile (manual)",
                         scope="Compiled mid-run", records=n,
@@ -999,9 +1002,12 @@ class Frontend:
             try:
                 result = leadfiles.compile_folder(folder, fmt, query)
                 if result:
-                    path, n = result
+                    path, n, sales_path, sales_n = result
                     self.__log(f"★ MAIN file ready: {os.path.basename(path)} "
                                f"— {n} clean leads.")
+                    if sales_path:
+                        self.__log(f"★ Sales team file ready: "
+                                  f"{os.path.basename(sales_path)} — {sales_n} rows.")
                     history.add_entry(
                         query=query, source="MAIN compile (manual)",
                         scope="Compiled from History tab", records=n,
@@ -1113,6 +1119,7 @@ class Frontend:
             backend = WebSearchBackend(
                 query=city_query.lower(), output_format=fmt.lower(),
                 max_results=max_results, on_done=lambda: None, output_dir=run_dir,
+                location=f"{city}, {region_label}".strip(", "),
                 global_seen_domains=global_seen_domains)
             try:
                 backend.run()
@@ -1136,9 +1143,12 @@ class Frontend:
         try:
             result = leadfiles.compile_folder(run_dir, fmt.lower(), query)
             if result:
-                path, n = result
+                path, n, sales_path, sales_n = result
                 self.__log(f"★ MAIN file ready: {os.path.basename(path)}  —  "
                            f"{n} clean leads (email/phone only).")
+                if sales_path:
+                    self.__log(f"★ Sales team file ready: "
+                              f"{os.path.basename(sales_path)}  —  {sales_n} rows.")
                 history.add_entry(
                     query=query, source="MAIN compile (Web Search)",
                     scope=region_label, records=n, output_file=path,

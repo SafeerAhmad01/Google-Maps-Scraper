@@ -45,12 +45,13 @@ SESS.headers.update({
 class WebSearchBackend:
 
     def __init__(self, query, output_format, max_results, on_done, output_dir=None,
-                 global_seen_domains=None):
+                 global_seen_domains=None, location=None):
         self.query         = query
         self.output_format = output_format
         self.max_results   = max_results
         self.on_done       = on_done
         self.output_dir    = output_dir or OUTPUT_PATH
+        self.location      = location or ""
         self.results       = []
         # Domains already scraped in this BATCH (e.g. a previous city in the
         # same Location-mode run). Shared across instances so a chain business
@@ -387,6 +388,7 @@ class WebSearchBackend:
                 'Email Belongs To': self._contact_owner(text, emails[0]) if emails else None,
                 'Phone':            ', '.join(phones[:3]) if phones else None,
                 'Phone Dept/Role':  self._contact_owner(text, phones[0]) if phones else None,
+                'Location':         self.location,
             }
         except Exception:
             return None

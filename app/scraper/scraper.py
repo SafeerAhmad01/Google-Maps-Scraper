@@ -227,7 +227,7 @@ class Backend(Base):
         if links:
             parser.parse_links(links)
 
-    def _run_web_for(self, query):
+    def _run_web_for(self, query, location=None):
         """Run the (browser-free) Web Search for a query into this run's folder.
         Safe to run in a thread alongside the Maps browser scrape.
 
@@ -241,7 +241,7 @@ class Backend(Base):
             WebSearchBackend(
                 query=query.lower(), output_format=self.outputformat,
                 max_results=50, on_done=lambda: None,
-                output_dir=self.run_dir,
+                output_dir=self.run_dir, location=location,
                 global_seen_domains=self._web_seen_domains).run()
         except Exception as e:
             Communicator.show_message(
@@ -255,10 +255,14 @@ class Backend(Base):
             result = leadfiles.compile_folder(
                 self.run_dir, self.outputformat, self.base_query)
             if result:
-                path, n = result
+                path, n, sales_path, sales_n = result
                 Communicator.show_message(
                     f"★ MAIN file ready: {os.path.basename(path)}  —  {n} clean "
                     f"leads (email/phone only).")
+                if sales_path:
+                    Communicator.show_message(
+                        f"★ Sales team file ready: {os.path.basename(sales_path)}  "
+                        f"—  {sales_n} rows (Name, Type, Email, Phone, Website, Location).")
                 history.add_entry(
                     query=self.base_query, source="MAIN compile",
                     scope="All files merged", records=n,
@@ -307,7 +311,8 @@ class Backend(Base):
         if self.run_web:
             Communicator.show_message("Also running Web Search in parallel...")
             web_thread = threading.Thread(
-                target=self._run_web_for, args=(self.base_query,), daemon=True)
+                target=self._run_web_for,
+                args=(self.base_query, self.region_scope), daemon=True)
             web_thread.start()
 
         try:
@@ -328,7 +333,10 @@ class Backend(Base):
                 Communicator.set_progress(index - 1, total,
                                           f"Searching {label}")
 
+                before_len = len(parser.finalData)
                 self._scrape_query(query, parser)
+                for row in parser.finalData[before_len:]:
+                    row["Location"] = label
                 Communicator.set_progress(index, total, f"Searched {label}")
 
             # Merge + de-duplicate everything, then save a single file.
@@ -396,7 +404,8 @@ class Backend(Base):
             web_thread = None
             if self.run_web and not Common.close_thread_is_set():
                 web_thread = threading.Thread(
-                    target=self._run_web_for, args=(direction_query,), daemon=True)
+                    target=self._run_web_for,
+                    args=(direction_query, word), daemon=True)
                 web_thread.start()
 
             output_file = None
@@ -408,6 +417,8 @@ class Backend(Base):
                 self._scrape_query(direction_query, parser)
 
                 data = self._dedupe(parser.finalData)
+                for row in data:
+                    row["Location"] = word
                 record_count = len(data)
                 output_file = DataSaver().save(datalist=data, output_dir=self.run_dir)
                 if output_file:
@@ -477,7 +488,9 @@ class Backend(Base):
             web_thread = None
             if self.run_web and not Common.close_thread_is_set():
                 web_thread = threading.Thread(
-                    target=self._run_web_for, args=(loc_query,), daemon=True)
+                    target=self._run_web_for,
+                    args=(loc_query, f"{hood}, {self.city_name}".strip(", ")),
+                    daemon=True)
                 web_thread.start()
 
             output_file = None
@@ -488,6 +501,8 @@ class Backend(Base):
                 parser = Parser(self.driver)
                 self._scrape_query(loc_query, parser)
                 data = self._dedupe(parser.finalData)
+                for row in data:
+                    row["Location"] = f"{hood}, {self.city_name}".strip(", ")
                 record_count = len(data)
                 output_file = DataSaver().save(datalist=data, output_dir=self.run_dir)
                 if not output_file:
