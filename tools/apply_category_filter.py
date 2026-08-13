@@ -15,6 +15,14 @@ import os
 import sys
 import argparse
 
+# Windows' console defaults to cp1252, which can't print plenty of real
+# business names (accented characters, non-Latin scripts) — without this,
+# the script crashes on the print BEFORE the file ever gets saved.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _APP = os.path.join(os.path.dirname(_HERE), "app")
 sys.path.insert(0, _APP)
@@ -57,11 +65,15 @@ def clean_file(path):
     dropped = df[~mask]
     kept = df[mask].reset_index(drop=True)
 
-    if not dropped.empty:
-        print("Dropped rows (category didn't match):")
-        print(dropped[["Name", "Category"]].to_string(index=False))
-
     kept.to_excel(path, index=False)
+
+    if not dropped.empty:
+        try:
+            print("Dropped rows (category didn't match):")
+            print(dropped[["Name", "Category"]].to_string(index=False))
+        except Exception:
+            pass  # the file is already saved either way
+
     return before, len(kept)
 
 

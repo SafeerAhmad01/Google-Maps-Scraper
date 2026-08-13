@@ -65,7 +65,10 @@
       "Bash(\"./venv/Scripts/python.exe\" tools/build_uae_areas.py)",
       "Bash('C:\\\\Users\\\\dell\\\\Documents\\\\Google-Maps-Scraper\\\\venv\\\\Scripts\\\\python.exe' -c ' *)",
       "Artifact",
-      "Bash(\"./venv/Scripts/python.exe\" tools/apply_category_filter.py \"dist\\\\output\\\\travel agents Aberdeen, United Kingdom\")"
+      "Bash(\"./venv/Scripts/python.exe\" tools/apply_category_filter.py \"dist\\\\output\\\\travel agents Aberdeen, United Kingdom\")",
+      "Bash(\"./venv/Scripts/python.exe\" tools/apply_category_filter.py \"dist\\\\output\\\\travel agents Aberdeenshire, United Kingdom\")",
+      "Bash(\"./venv/Scripts/python.exe\" tools/apply_category_filter.py \"dist\\\\output\\\\travel agents Angus, United Kingdom\")",
+      "Bash(\"./venv/Scripts/python.exe\" -m py_compile tools/apply_category_filter.py)"
     ],
     "deny": [],
     "ask": []
