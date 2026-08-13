@@ -32,7 +32,7 @@ _RELEVANT_CATEGORY_KEYWORDS = (
     "visa", "immigration", "passport",
     # transfer / transport
     "taxi", "transfer", "transport", "car rental", "car hire",
-    "chauffeur", "shuttle", "coach",
+    "chauffeur", "shuttle", "coach", "ferry",
     # hotel / accommodation
     "hotel", "motel", "resort", "lodging", "accommodation",
     "guest house", "hostel", "holiday home", "holiday apartment",
